@@ -40,12 +40,22 @@
         android:layout_width="0dp"
         android:layout_height="wrap_content"
         android:layout_marginTop="6dp"
-        android:text="App root 索引会按需加载 library 生成的 X2CGroup；下面是 RecyclerView。"
+        android:text="App root 索引会按需加载 library 生成的 X2CGroup；下方 include 来自 feature-nested。"
         android:textColor="#35566B"
         android:textSize="13sp"
         app:layout_constraintEnd_toEndOf="@id/feature_badge"
         app:layout_constraintStart_toStartOf="@id/feature_title"
         app:layout_constraintTop_toBottomOf="@id/feature_title" />
+
+    <include
+        android:id="@+id/nested_card"
+        layout="@layout/nested_card"
+        android:layout_width="0dp"
+        android:layout_height="72dp"
+        android:layout_marginTop="10dp"
+        app:layout_constraintEnd_toEndOf="@id/feature_subtitle"
+        app:layout_constraintStart_toStartOf="@id/feature_subtitle"
+        app:layout_constraintTop_toBottomOf="@id/feature_subtitle" />
 
     <androidx.recyclerview.widget.RecyclerView
         android:id="@+id/feature_list"
@@ -58,6 +68,6 @@
         app:layout_constraintBottom_toBottomOf="parent"
         app:layout_constraintEnd_toEndOf="@id/feature_subtitle"
         app:layout_constraintStart_toStartOf="@id/feature_subtitle"
-        app:layout_constraintTop_toBottomOf="@id/feature_subtitle" />
+        app:layout_constraintTop_toBottomOf="@id/nested_card" />
 
 </androidx.constraintlayout.widget.ConstraintLayout>

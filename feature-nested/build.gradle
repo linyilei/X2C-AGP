@@ -31,7 +31,5 @@ dependencies {
     implementation useRemoteX2c
             ? 'com.github.linyilei.X2C-AGP:x2c-runtime:v0.1.0'
             : project(':x2c-runtime')
-    implementation project(':feature-nested')
     implementation 'androidx.constraintlayout:constraintlayout:2.0.4'
-    implementation 'androidx.recyclerview:recyclerview:1.2.1'
 }

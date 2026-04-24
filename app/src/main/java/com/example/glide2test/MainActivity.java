@@ -27,14 +27,16 @@ public class MainActivity extends AppCompatActivity {
         list.setAdapter(new TextAdapter(Arrays.asList(
                 "主模块 item 1：activity_main 命中 app 生成的 X2CGroup",
                 "主模块 item 2：feature_card 通过 root 索引懒加载 library group",
-                "主模块 item 3：普通 include 作为整体参与 ConstraintLayout 约束"
+                "主模块 item 3：feature_card 内部 include feature-nested，验证 app→feature-demo→feature-nested",
+                "主模块 item 4：merge include 使用包装层承载 include 标签约束"
         )));
 
         RecyclerView featureList = findViewById(com.example.featuredemo.R.id.feature_list);
         featureList.setLayoutManager(new LinearLayoutManager(this));
         featureList.setAdapter(new TextAdapter(Arrays.asList(
                 "子模块卡片 item 1：library layout 被 app root 索引路由命中",
-                "子模块卡片 item 2：RecyclerView 使用 AttributeSet 创建"
+                "子模块卡片 item 2：nested_card 来自 feature-demo 的下游模块",
+                "子模块卡片 item 3：RecyclerView 使用 AttributeSet 创建"
         )));
 
         findViewById(R.id.open_feature).setOnClickListener(v ->

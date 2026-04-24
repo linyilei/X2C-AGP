@@ -6,6 +6,7 @@ import android.util.Xml;
 import android.view.InflateException;
 import android.view.View;
 import android.view.ViewGroup;
+import android.widget.FrameLayout;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
@@ -14,6 +15,7 @@ import org.xmlpull.v1.XmlPullParser;
 import org.xmlpull.v1.XmlPullParserException;
 
 import java.io.IOException;
+import java.lang.reflect.Constructor;
 import java.lang.reflect.Method;
 
 public final class InflateUtils {
@@ -98,8 +100,30 @@ public final class InflateUtils {
         return view;
     }
 
-    public static void includeMerge(@NonNull Context context, @NonNull ViewGroup parent, int layoutId) {
-        X2C.inflate(context, layoutId, parent, true);
+    @NonNull
+    public static View includeMerge(@NonNull Context context, @NonNull ViewGroup parent, int layoutId,
+                                    @NonNull AttributeSet includeAttrs) {
+        ViewGroup.LayoutParams params = generateLayoutParams(parent, includeAttrs);
+        int id = includeAttrs.getAttributeResourceValue(ANDROID_NS, "id", View.NO_ID);
+        int visibility = parseVisibility(includeAttrs.getAttributeValue(ANDROID_NS, "visibility"));
+        if (params == null && id == View.NO_ID && visibility == -1) {
+            return X2C.inflate(context, layoutId, parent, true);
+        }
+
+        ViewGroup wrapper = createMergeWrapper(context, parent, includeAttrs);
+        if (params != null) {
+            wrapper.setLayoutParams(params);
+        }
+        if (id != View.NO_ID) {
+            wrapper.setId(id);
+        }
+        if (visibility != -1) {
+            wrapper.setVisibility(visibility);
+        }
+        addView(parent, wrapper, params);
+        X2C.inflate(context, layoutId, wrapper, true);
+        finishInflate(wrapper);
+        return wrapper;
     }
 
     public static void finishInflate(@Nullable View view) {
@@ -135,5 +159,32 @@ public final class InflateUtils {
             return View.GONE;
         }
         return -1;
+    }
+
+    @NonNull
+    private static ViewGroup createMergeWrapper(@NonNull Context context, @NonNull ViewGroup parent,
+                                                @NonNull AttributeSet includeAttrs) {
+        Class<?> parentType = parent.getClass();
+        if (ViewGroup.class.isAssignableFrom(parentType)) {
+            try {
+                Constructor<?> constructor = parentType.getConstructor(Context.class, AttributeSet.class);
+                Object instance = constructor.newInstance(context, includeAttrs);
+                if (instance instanceof ViewGroup) {
+                    return (ViewGroup) instance;
+                }
+            } catch (Exception ignored) {
+                // Try a simpler constructor below.
+            }
+            try {
+                Constructor<?> constructor = parentType.getConstructor(Context.class);
+                Object instance = constructor.newInstance(context);
+                if (instance instanceof ViewGroup) {
+                    return (ViewGroup) instance;
+                }
+            } catch (Exception ignored) {
+                // Fall through to a neutral container.
+            }
+        }
+        return new FrameLayout(context, includeAttrs);
     }
 }

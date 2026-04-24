@@ -22,8 +22,9 @@ public class FeatureDemoActivity extends Activity {
 
         bindList(R.id.feature_list, Arrays.asList(
                 "card item 1：feature_card 被当前模块 X2C 命中",
-                "card item 2：RecyclerView 由 AttributeSet 构造",
-                "card item 3：ConstraintLayout.LayoutParams 来自 XML"
+                "card item 2：nested_card 来自 feature-demo -> feature-nested 传递依赖",
+                "card item 3：RecyclerView 由 AttributeSet 构造",
+                "card item 4：ConstraintLayout.LayoutParams 来自 XML"
         ));
         bindList(R.id.feature_activity_list, Arrays.asList(
                 "activity item 1：activity_feature_demo 由 library X2CGroup 创建",

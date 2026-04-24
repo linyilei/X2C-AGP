@@ -1,10 +1,19 @@
 package io.github.linyilei.x2c.gradle
 
+import com.squareup.javapoet.ClassName
+import com.squareup.javapoet.CodeBlock
+import com.squareup.javapoet.JavaFile
+import com.squareup.javapoet.MethodSpec
+import com.squareup.javapoet.ParameterizedTypeName
+import com.squareup.javapoet.TypeName
+import com.squareup.javapoet.TypeSpec
+import com.squareup.javapoet.WildcardTypeName
 import org.gradle.api.DefaultTask
 import org.gradle.api.Plugin
 import org.gradle.api.Project
-import org.gradle.api.artifacts.ProjectDependency
+import org.gradle.api.attributes.Attribute
 import org.gradle.api.file.FileCollection
+import org.gradle.api.tasks.Classpath
 import org.gradle.api.tasks.Input
 import org.gradle.api.tasks.InputFiles
 import org.gradle.api.tasks.OutputDirectory
@@ -15,11 +24,11 @@ import org.w3c.dom.Element
 import org.w3c.dom.Node
 
 import javax.xml.parsers.DocumentBuilderFactory
+import javax.lang.model.element.Modifier
+import java.util.zip.ZipFile
+import java.util.zip.ZipInputStream
 
 class X2cPlugin implements Plugin<Project> {
-
-    static final String GROUP_CLASS_PROPERTY = 'codexX2cGeneratedGroupClassName'
-    static final String R_PACKAGE_PROPERTY = 'codexX2cRPackageName'
 
     @Override
     void apply(Project project) {
@@ -35,10 +44,6 @@ class X2cPlugin implements Plugin<Project> {
         def android = project.extensions.getByName('android')
         String rPackage = resolveManifestPackage(project, android)
         String libraryGeneratedPackage = applicationModule ? null : rPackage + '.x2c'
-        if (!applicationModule) {
-            project.extensions.extraProperties.set(GROUP_CLASS_PROPERTY, libraryGeneratedPackage + '.X2CGroup')
-            project.extensions.extraProperties.set(R_PACKAGE_PROPERTY, rPackage)
-        }
 
         def variants = applicationModule ? android.applicationVariants : android.libraryVariants
         variants.all { variant ->
@@ -52,9 +57,26 @@ class X2cPlugin implements Plugin<Project> {
                 it.resDirs = variant.sourceSets.collectMany { sourceSet ->
                     sourceSet.resDirectories.findAll { File dir -> dir.exists() }
                 }
+                if (applicationModule) {
+                    def runtimeClasspath = project.configurations.findByName("${variant.name}RuntimeClasspath")
+                    it.moduleIndexClasspath = runtimeClasspath == null
+                            ? project.files()
+                            : moduleIndexClasspath(project, runtimeClasspath)
+                }
             }
             variant.registerJavaGeneratingTask(task, outputDir)
         }
+    }
+
+    private static FileCollection moduleIndexClasspath(Project project, def runtimeClasspath) {
+        Attribute<String> artifactType = Attribute.of('artifactType', String)
+        FileCollection androidClassesJars = runtimeClasspath.incoming.artifactView { view ->
+            view.attributes.attribute(artifactType, 'android-classes-jar')
+        }.files
+        FileCollection jars = runtimeClasspath.incoming.artifactView { view ->
+            view.attributes.attribute(artifactType, 'jar')
+        }.files
+        project.files(androidClassesJars, jars)
     }
 
     private static String resolveManifestPackage(Project project, def android) {
@@ -104,6 +126,7 @@ class GenerateX2cTask extends DefaultTask {
     String generatedPackage
     boolean applicationModule
     List<File> resDirs = []
+    FileCollection moduleIndexClasspath
 
     @Input
     String getX2cGeneratedPackage() {
@@ -120,19 +143,16 @@ class GenerateX2cTask extends DefaultTask {
         return applicationModule
     }
 
-    @Input
-    List<String> getX2cAggregateGroupEntries() {
-        return findAggregatedGroupSpecs().collectMany { AggregateGroupSpec spec ->
-            spec.layoutNames.collect { String layoutName ->
-                "${spec.rPackage}:${layoutName}:${spec.groupClassName}"
-            }
-        }.sort()
-    }
-
     @InputFiles
     @PathSensitive(PathSensitivity.RELATIVE)
     FileCollection getX2cResourceDirs() {
         return project.files(resDirs)
+    }
+
+    @InputFiles
+    @Classpath
+    FileCollection getX2cModuleIndexClasspath() {
+        return moduleIndexClasspath ?: project.files()
     }
 
     @TaskAction
@@ -150,53 +170,102 @@ class GenerateX2cTask extends DefaultTask {
 
         Map<String, Map<String, LayoutSpec>> layouts = scanLayouts()
         Set<String> targets = resolveGenerationTargets(layouts)
-        List<AggregateGroupSpec> aggregateGroupSpecs = findAggregatedGroupSpecs()
-        if (targets.isEmpty() && aggregateGroupSpecs.isEmpty()) {
+        List<String> moduleIndexClassNames = findModuleIndexClassNames()
+        if (targets.isEmpty() && moduleIndexClassNames.isEmpty()) {
             project.logger.lifecycle('X2C found no layouts marked with tools:x2c="standard".')
             return
         }
 
         JavaWriter writer = new JavaWriter(outputDir, generatedPackage, rPackage, layouts, targets,
-                aggregateGroupSpecs, applicationModule, project)
+                moduleIndexClassNames, applicationModule, project)
         writer.writeAll()
     }
 
-    private List<AggregateGroupSpec> findAggregatedGroupSpecs() {
-        Set<Project> dependencies = new LinkedHashSet<>()
-        collectDirectProjectDependencies(project, dependencies)
-        dependencies.collect { Project dependency ->
-            if (!dependency.extensions.extraProperties.has(X2cPlugin.GROUP_CLASS_PROPERTY)
-                    || !dependency.extensions.extraProperties.has(X2cPlugin.R_PACKAGE_PROPERTY)) {
-                return null
-            }
-            String groupClassName = dependency.extensions.extraProperties.get(X2cPlugin.GROUP_CLASS_PROPERTY).toString()
-            String dependencyRPackage = dependency.extensions.extraProperties.get(X2cPlugin.R_PACKAGE_PROPERTY).toString()
-            def android = dependency.extensions.findByName('android')
-            if (android == null) {
-                return null
-            }
-            List<File> dependencyResDirs = android.sourceSets.collectMany { sourceSet ->
-                sourceSet.resDirectories.findAll { File dir -> dir.exists() }
-            }
-            Map<String, Map<String, LayoutSpec>> dependencyLayouts = scanLayouts(dependencyResDirs, dependency)
-            Set<String> dependencyTargets = resolveGenerationTargets(dependencyLayouts)
-            Set<String> supportedLayouts = dependencyTargets.findAll { String layoutName ->
-                dependencyLayouts[layoutName]?.values()?.any { LayoutSpec spec -> !spec.unsupported }
-            } as Set<String>
-            supportedLayouts.isEmpty() ? null : new AggregateGroupSpec(groupClassName, dependencyRPackage, supportedLayouts)
-        }.findAll { AggregateGroupSpec spec -> spec != null }
-                .sort { AggregateGroupSpec spec -> spec.groupClassName }
+    private List<String> findModuleIndexClassNames() {
+        if (!applicationModule) {
+            return []
+        }
+        Set<String> classNames = new LinkedHashSet<>()
+        getX2cModuleIndexClasspath().files.each { File file ->
+            scanModuleIndexClasses(file, classNames)
+        }
+        classNames.sort()
     }
 
-    private static void collectDirectProjectDependencies(Project owner, Set<Project> result) {
-        ['api', 'implementation', 'compile'].each { String configurationName ->
-            def configuration = owner.configurations.findByName(configurationName)
-            if (configuration == null) {
-                return
+    private static void scanModuleIndexClasses(File file, Set<String> classNames) {
+        if (file == null || !file.exists()) {
+            return
+        }
+        if (file.isDirectory()) {
+            scanClassDirectory(file, classNames)
+            return
+        }
+        if (file.name.endsWith('.jar')) {
+            scanZipFile(file, classNames, false)
+            return
+        }
+        if (file.name.endsWith('.aar')) {
+            scanZipFile(file, classNames, true)
+        }
+    }
+
+    private static void scanClassDirectory(File dir, Set<String> classNames) {
+        dir.eachFileRecurse { File child ->
+            if (child.isFile() && child.name == 'X2CModuleIndex.class') {
+                String relativePath = dir.toPath().relativize(child.toPath()).toString().replace(File.separatorChar, '/' as char)
+                addModuleIndexClass(relativePath, classNames)
             }
-            configuration.dependencies.withType(ProjectDependency).each { ProjectDependency dependency ->
-                result.add(dependency.dependencyProject)
+        }
+    }
+
+    private static void scanZipFile(File file, Set<String> classNames, boolean scanNestedJars) {
+        try {
+            ZipFile zipFile = new ZipFile(file)
+            try {
+                zipFile.entries().each { entry ->
+                    if (entry.directory) {
+                        return
+                    }
+                    String name = entry.name
+                    if (name.endsWith('.class')) {
+                        addModuleIndexClass(name, classNames)
+                    } else if (scanNestedJars && (name == 'classes.jar' || (name.startsWith('libs/') && name.endsWith('.jar')))) {
+                        InputStream inputStream = zipFile.getInputStream(entry)
+                        try {
+                            scanJarStream(inputStream, classNames)
+                        } finally {
+                            inputStream.close()
+                        }
+                    }
+                }
+            } finally {
+                zipFile.close()
             }
+        } catch (Exception ignored) {
+            // Broken or non-zip files on the classpath are not X2C module indexes.
+        }
+    }
+
+    private static void scanJarStream(InputStream inputStream, Set<String> classNames) {
+        ZipInputStream zipInputStream = new ZipInputStream(inputStream)
+        try {
+            def entry = zipInputStream.nextEntry
+            while (entry != null) {
+                if (!entry.directory && entry.name.endsWith('.class')) {
+                    addModuleIndexClass(entry.name, classNames)
+                }
+                zipInputStream.closeEntry()
+                entry = zipInputStream.nextEntry
+            }
+        } finally {
+            zipInputStream.close()
+        }
+    }
+
+    private static void addModuleIndexClass(String entryName, Set<String> classNames) {
+        String normalized = entryName.replace('\\', '/')
+        if (normalized == 'x2c/X2CModuleIndex.class' || normalized.endsWith('/x2c/X2CModuleIndex.class')) {
+            classNames.add(normalized.substring(0, normalized.length() - '.class'.length()).replace('/', '.'))
         }
     }
 
@@ -337,24 +406,43 @@ class LayoutParser {
 
 class JavaWriter {
 
+    private static final ClassName CONTEXT = ClassName.get('android.content', 'Context')
+    private static final ClassName CONFIGURATION = ClassName.get('android.content.res', 'Configuration')
+    private static final ClassName XML_RESOURCE_PARSER = ClassName.get('android.content.res', 'XmlResourceParser')
+    private static final ClassName ATTRIBUTE_SET = ClassName.get('android.util', 'AttributeSet')
+    private static final ClassName SPARSE_ARRAY = ClassName.get('android.util', 'SparseArray')
+    private static final ClassName SPARSE_INT_ARRAY = ClassName.get('android.util', 'SparseIntArray')
+    private static final ClassName INFLATE_EXCEPTION = ClassName.get('android.view', 'InflateException')
+    private static final ClassName VIEW = ClassName.get('android.view', 'View')
+    private static final ClassName VIEW_GROUP = ClassName.get('android.view', 'ViewGroup')
+    private static final ClassName I_VIEW_FACTORY = ClassName.get('io.github.linyilei.x2c.runtime', 'IViewFactory')
+    private static final ClassName X2C_GROUP = ClassName.get('io.github.linyilei.x2c.runtime', 'X2CGroup')
+    private static final ClassName X2C_ROOT_INDEX = ClassName.get('io.github.linyilei.x2c.runtime', 'X2CRootIndex')
+    private static final ClassName INFLATE_UTILS = ClassName.get('io.github.linyilei.x2c.runtime', 'InflateUtils')
+    private static final ClassName STRING = ClassName.get('java.lang', 'String')
+    private static final ClassName OBJECT = ClassName.get('java.lang', 'Object')
+    private static final ClassName CLASS = ClassName.get('java.lang', 'Class')
+    private static final ClassName THROWABLE = ClassName.get('java.lang', 'Throwable')
+    private static final ClassName EXCEPTION = ClassName.get('java.lang', 'Exception')
+
     private final File outputDir
     private final String generatedPackage
     private final String rPackage
     private final Map<String, Map<String, LayoutSpec>> layouts
     private final Set<String> targets
-    private final List<AggregateGroupSpec> aggregateGroupSpecs
+    private final List<String> moduleIndexClassNames
     private final boolean applicationModule
     private final Project project
 
     JavaWriter(File outputDir, String generatedPackage, String rPackage,
                Map<String, Map<String, LayoutSpec>> layouts, Set<String> targets,
-               List<AggregateGroupSpec> aggregateGroupSpecs, boolean applicationModule, Project project) {
+               List<String> moduleIndexClassNames, boolean applicationModule, Project project) {
         this.outputDir = outputDir
         this.generatedPackage = generatedPackage
         this.rPackage = rPackage
         this.layouts = layouts
         this.targets = targets
-        this.aggregateGroupSpecs = aggregateGroupSpecs
+        this.moduleIndexClassNames = moduleIndexClassNames
         this.applicationModule = applicationModule
         this.project = project
     }
@@ -373,61 +461,74 @@ class JavaWriter {
         writeGroup()
         if (applicationModule) {
             writeRootIndex()
+        } else {
+            writeModuleIndex()
         }
     }
 
     private void writeGroup() {
-        StringBuilder body = new StringBuilder()
-        body << "package ${generatedPackage};\n\n"
-        body << "import android.util.SparseArray;\n"
-        body << "import io.github.linyilei.x2c.runtime.IViewFactory;\n"
-        body << "import ${rPackage}.R;\n\n"
-        body << "public final class X2CGroup implements io.github.linyilei.x2c.runtime.X2CGroup {\n"
-        body << "  @Override public void loadInto(SparseArray<IViewFactory> factories) {\n"
+        ParameterizedTypeName factoryArray = ParameterizedTypeName.get(SPARSE_ARRAY, I_VIEW_FACTORY)
+        MethodSpec.Builder loadInto = MethodSpec.methodBuilder('loadInto')
+                .addAnnotation(Override)
+                .addModifiers(Modifier.PUBLIC)
+                .returns(TypeName.VOID)
+                .addParameter(factoryArray, 'factories')
         targets.each { String layoutName ->
             if (hasSupportedVariant(layoutName)) {
-                body << "    factories.put(R.layout.${layoutName}, new ${dispatcherName(layoutName)}());\n"
+                loadInto.addStatement('factories.put($T.layout.$L, new $T())',
+                        rClass(), layoutName, ClassName.get(generatedPackage, dispatcherName(layoutName)))
             }
         }
-        body << "  }\n"
-        body << "}\n"
-        writeJavaFile('X2CGroup', body.toString())
+        TypeSpec typeSpec = TypeSpec.classBuilder('X2CGroup')
+                .addModifiers(Modifier.PUBLIC, Modifier.FINAL)
+                .addSuperinterface(X2C_GROUP)
+                .addMethod(loadInto.build())
+                .build()
+        writeJavaFile(typeSpec)
+    }
+
+    private void writeModuleIndex() {
+        String groupClassName = "${generatedPackage}.X2CGroup"
+        MethodSpec.Builder loadInto = rootLoadIntoBuilder()
+        loadInto.addStatement('int groupId = ensureGroup(groupClassNames, $S)', groupClassName)
+        targets.each { String layoutName ->
+            if (hasSupportedVariant(layoutName)) {
+                loadInto.addStatement('layoutToGroup.put($T.layout.$L, groupId)', rClass(), layoutName)
+            }
+        }
+        TypeSpec typeSpec = TypeSpec.classBuilder('X2CModuleIndex')
+                .addModifiers(Modifier.PUBLIC, Modifier.FINAL)
+                .addSuperinterface(X2C_ROOT_INDEX)
+                .addMethod(loadInto.build())
+                .addMethod(ensureGroupMethod())
+                .addMethod(nextGroupIdMethod())
+                .build()
+        writeJavaFile(typeSpec)
     }
 
     private void writeRootIndex() {
-        Map<String, Integer> groupIds = new LinkedHashMap<>()
+        MethodSpec.Builder loadInto = rootLoadIntoBuilder()
         if (targets.any { String layoutName -> hasSupportedVariant(layoutName) }) {
-            groupIds.put("${generatedPackage}.X2CGroup", groupIds.size())
-        }
-        aggregateGroupSpecs.each { AggregateGroupSpec spec ->
-            if (!groupIds.containsKey(spec.groupClassName)) {
-                groupIds.put(spec.groupClassName, groupIds.size())
+            String groupClassName = "${generatedPackage}.X2CGroup"
+            loadInto.addStatement('groupClassNames.put(0, $S)', groupClassName)
+            targets.each { String layoutName ->
+                if (hasSupportedVariant(layoutName)) {
+                    loadInto.addStatement('layoutToGroup.put($T.layout.$L, 0)', rClass(), layoutName)
+                }
             }
         }
-
-        StringBuilder body = new StringBuilder()
-        body << "package ${generatedPackage};\n\n"
-        body << "import android.util.SparseArray;\n"
-        body << "import android.util.SparseIntArray;\n"
-        body << "import ${rPackage}.R;\n\n"
-        body << "public final class X2CRootIndex implements io.github.linyilei.x2c.runtime.X2CRootIndex {\n"
-        body << "  @Override public void loadInto(SparseIntArray layoutToGroup, SparseArray<String> groupClassNames) {\n"
-        groupIds.each { String groupClassName, Integer groupId ->
-            body << "    groupClassNames.put(${groupId}, \"${groupClassName}\");\n"
+        moduleIndexClassNames.each { String className ->
+            loadInto.addStatement('loadModuleIndex($S, layoutToGroup, groupClassNames)', className)
         }
-        targets.each { String layoutName ->
-            if (hasSupportedVariant(layoutName)) {
-                body << "    layoutToGroup.put(R.layout.${layoutName}, ${groupIds.get("${generatedPackage}.X2CGroup")});\n"
-            }
-        }
-        aggregateGroupSpecs.each { AggregateGroupSpec spec ->
-            spec.layoutNames.each { String layoutName ->
-                body << "    layoutToGroup.put(${spec.rPackage}.R.layout.${layoutName}, ${groupIds.get(spec.groupClassName)});\n"
-            }
-        }
-        body << "  }\n"
-        body << "}\n"
-        writeJavaFile('X2CRootIndex', body.toString())
+        TypeSpec typeSpec = TypeSpec.classBuilder('X2CRootIndex')
+                .addModifiers(Modifier.PUBLIC, Modifier.FINAL)
+                .addSuperinterface(X2C_ROOT_INDEX)
+                .addMethod(loadInto.build())
+                .addMethod(loadModuleIndexMethod())
+                .addMethod(ensureGroupMethod())
+                .addMethod(nextGroupIdMethod())
+                .build()
+        writeJavaFile(typeSpec)
     }
 
     private void writeDispatcher(String layoutName) {
@@ -437,77 +538,77 @@ class JavaWriter {
         }
         supported.sort { LayoutSpec spec -> -variantScore(spec.qualifier) }
 
-        StringBuilder body = new StringBuilder()
-        body << "package ${generatedPackage};\n\n"
-        body << "import android.content.Context;\n"
-        body << "import android.os.Build;\n"
-        body << "import android.view.View;\n"
-        body << "import android.view.ViewGroup;\n"
-        body << "import io.github.linyilei.x2c.runtime.IViewFactory;\n\n"
-        body << "public final class ${dispatcherName(layoutName)} implements IViewFactory {\n"
-        body << "  @Override public View createView(Context context, ViewGroup parent, boolean attachToParent) {\n"
+        MethodSpec.Builder createView = createViewBuilder()
         List<LayoutSpec> conditionalVariants = supported.findAll { LayoutSpec spec -> qualifierCondition(spec.qualifier) != null }
         conditionalVariants.eachWithIndex { LayoutSpec spec, int index ->
             String condition = qualifierCondition(spec.qualifier)
-            body << "    ${index == 0 ? 'if' : 'else if'} (${condition}) {\n"
-            body << "      return new ${variantFactoryName(spec)}().createView(context, parent, attachToParent);\n"
-            body << "    }\n"
+            if (index == 0) {
+                createView.beginControlFlow("if (${condition})")
+            } else {
+                createView.nextControlFlow("else if (${condition})")
+            }
+            createView.addStatement('return new $T().createView(context, parent, attachToParent)',
+                    ClassName.get(generatedPackage, variantFactoryName(spec)))
         }
         LayoutSpec fallback = supported.find { it.qualifier == '' } ?: supported.last()
-        body << "    return new ${variantFactoryName(fallback)}().createView(context, parent, attachToParent);\n"
-        body << "  }\n"
-        body << "}\n"
-        writeJavaFile(dispatcherName(layoutName), body.toString())
+        if (!conditionalVariants.isEmpty()) {
+            createView.nextControlFlow('else')
+            createView.addStatement('return new $T().createView(context, parent, attachToParent)',
+                    ClassName.get(generatedPackage, variantFactoryName(fallback)))
+            createView.endControlFlow()
+        } else {
+            createView.addStatement('return new $T().createView(context, parent, attachToParent)',
+                    ClassName.get(generatedPackage, variantFactoryName(fallback)))
+        }
+        TypeSpec typeSpec = TypeSpec.classBuilder(dispatcherName(layoutName))
+                .addModifiers(Modifier.PUBLIC, Modifier.FINAL)
+                .addSuperinterface(I_VIEW_FACTORY)
+                .addMethod(createView.build())
+                .build()
+        writeJavaFile(typeSpec)
     }
 
     private void writeVariantFactory(LayoutSpec spec) {
         String className = variantFactoryName(spec)
-        StringBuilder body = new StringBuilder()
-        body << "package ${generatedPackage};\n\n"
-        body << "import android.content.Context;\n"
-        body << "import android.content.res.XmlResourceParser;\n"
-        body << "import android.util.AttributeSet;\n"
-        body << "import android.view.InflateException;\n"
-        body << "import android.view.View;\n"
-        body << "import android.view.ViewGroup;\n"
-        body << "import io.github.linyilei.x2c.runtime.IViewFactory;\n"
-        body << "import io.github.linyilei.x2c.runtime.InflateUtils;\n"
-        body << "import ${rPackage}.R;\n\n"
-        body << "public final class ${className} implements IViewFactory {\n"
-        body << "  @Override public View createView(Context context, ViewGroup parent, boolean attachToParent) {\n"
-        body << "    XmlResourceParser parser = context.getResources().getXml(R.layout.${spec.name});\n"
-        body << "    try {\n"
+        CodeBlock.Builder body = CodeBlock.builder()
+        body.addStatement('$T parser = context.getResources().getXml($T.layout.$L)', XML_RESOURCE_PARSER, rClass(), spec.name)
+        body.beginControlFlow('try')
         if (spec.root.tag == 'merge') {
-            body << "      if (parent == null || !attachToParent) {\n"
-            body << "        throw new InflateException(\"<merge> root requires a parent and attachToParent=true: ${spec.name}\");\n"
-            body << "      }\n"
-            body << "      InflateUtils.nextStartTag(parser);\n"
+            body.beginControlFlow('if (parent == null || !attachToParent)')
+            body.addStatement('throw new $T($S)', INFLATE_EXCEPTION,
+                    "<merge> root requires a parent and attachToParent=true: ${spec.name}")
+            body.endControlFlow()
+            body.addStatement('$T.nextStartTag(parser)', INFLATE_UTILS)
             CodeGenContext context = new CodeGenContext()
             spec.root.children.each { LayoutNode child ->
                 emitNode(body, child, 'parent', context, false)
             }
-            body << "      return parent;\n"
+            body.addStatement('return parent')
         } else {
             CodeGenContext context = new CodeGenContext()
             String rootVar = emitNode(body, spec.root, 'parent', context, true)
-            body << "      return ${rootVar};\n"
+            body.addStatement('return $N', rootVar)
         }
-        body << "    } catch (InflateException e) {\n"
-        body << "      throw e;\n"
-        body << "    } catch (Exception e) {\n"
-        body << "      throw new InflateException(\"X2C failed to inflate ${spec.file.name}\", e);\n"
-        body << "    } finally {\n"
-        body << "      parser.close();\n"
-        body << "    }\n"
-        body << "  }\n"
-        body << "}\n"
-        writeJavaFile(className, body.toString())
+        body.nextControlFlow('catch ($T e)', INFLATE_EXCEPTION)
+        body.addStatement('throw e')
+        body.nextControlFlow('catch ($T e)', EXCEPTION)
+        body.addStatement('throw new $T($S, e)', INFLATE_EXCEPTION, "X2C failed to inflate ${spec.file.name}")
+        body.nextControlFlow('finally')
+        body.addStatement('parser.close()')
+        body.endControlFlow()
+
+        TypeSpec typeSpec = TypeSpec.classBuilder(className)
+                .addModifiers(Modifier.PUBLIC, Modifier.FINAL)
+                .addSuperinterface(I_VIEW_FACTORY)
+                .addMethod(createViewBuilder().addCode(body.build()).build())
+                .build()
+        writeJavaFile(typeSpec)
     }
 
-    private String emitNode(StringBuilder body, LayoutNode node, String parentVar, CodeGenContext context, boolean root) {
+    private String emitNode(CodeBlock.Builder body, LayoutNode node, String parentVar, CodeGenContext context, boolean root) {
         int index = context.nextIndex()
         String attrs = "attrs${index}"
-        body << "      AttributeSet ${attrs} = InflateUtils.nextStartTag(parser);\n"
+        body.addStatement('$T $N = $T.nextStartTag(parser)', ATTRIBUTE_SET, attrs, INFLATE_UTILS)
 
         if (node.tag == 'include') {
             if (node.includeName == null || node.includeName.isEmpty()) {
@@ -515,32 +616,124 @@ class JavaWriter {
             }
             boolean mergeRoot = isMergeRoot(node.includeName)
             if (mergeRoot) {
-                body << "      InflateUtils.includeMerge(context, ${parentVar}, R.layout.${node.includeName});\n"
+                body.addStatement('$T.includeMerge(context, $N, $T.layout.$L, $N)', INFLATE_UTILS, parentVar, rClass(), node.includeName, attrs)
             } else {
-                body << "      InflateUtils.include(context, ${parentVar}, R.layout.${node.includeName}, ${attrs});\n"
+                body.addStatement('$T.include(context, $N, $T.layout.$L, $N)', INFLATE_UTILS, parentVar, rClass(), node.includeName, attrs)
             }
             return null
         }
 
-        String type = resolveViewType(node)
+        ClassName type = ClassName.bestGuess(resolveViewType(node))
         String view = "view${index}"
-        body << "      ${type} ${view} = new ${type}(context, ${attrs});\n"
+        body.addStatement('$T $N = new $T(context, $N)', type, view, type, attrs)
         if (root) {
-            body << "      InflateUtils.attachRoot(parent, ${view}, ${attrs}, attachToParent);\n"
+            body.addStatement('$T.attachRoot(parent, $N, $N, attachToParent)', INFLATE_UTILS, view, attrs)
         } else {
-            body << "      InflateUtils.addView(${parentVar}, ${view}, ${attrs});\n"
+            body.addStatement('$T.addView($N, $N, $N)', INFLATE_UTILS, parentVar, view, attrs)
         }
 
         String childParent = view
         if (!node.children.isEmpty()) {
             childParent = "group${index}"
-            body << "      ViewGroup ${childParent} = (ViewGroup) ${view};\n"
+            body.addStatement('$T $N = ($T) $N', VIEW_GROUP, childParent, VIEW_GROUP, view)
             node.children.each { LayoutNode child ->
                 emitNode(body, child, childParent, context, false)
             }
         }
-        body << "      InflateUtils.finishInflate(${view});\n"
+        body.addStatement('$T.finishInflate($N)', INFLATE_UTILS, view)
         return view
+    }
+
+    private MethodSpec.Builder createViewBuilder() {
+        return MethodSpec.methodBuilder('createView')
+                .addAnnotation(Override)
+                .addModifiers(Modifier.PUBLIC)
+                .returns(VIEW)
+                .addParameter(CONTEXT, 'context')
+                .addParameter(VIEW_GROUP, 'parent')
+                .addParameter(TypeName.BOOLEAN, 'attachToParent')
+    }
+
+    private MethodSpec.Builder rootLoadIntoBuilder() {
+        return MethodSpec.methodBuilder('loadInto')
+                .addAnnotation(Override)
+                .addModifiers(Modifier.PUBLIC)
+                .returns(TypeName.VOID)
+                .addParameter(SPARSE_INT_ARRAY, 'layoutToGroup')
+                .addParameter(ParameterizedTypeName.get(SPARSE_ARRAY, STRING), 'groupClassNames')
+    }
+
+    private MethodSpec loadModuleIndexMethod() {
+        ParameterizedTypeName classType = ParameterizedTypeName.get(CLASS, WildcardTypeName.subtypeOf(OBJECT))
+        ParameterizedTypeName stringArray = ParameterizedTypeName.get(SPARSE_ARRAY, STRING)
+        CodeBlock.Builder body = CodeBlock.builder()
+        body.beginControlFlow('try')
+        body.addStatement('$T clazz = $T.forName(className)', classType, CLASS)
+        body.addStatement('$T instance = clazz.getDeclaredConstructor().newInstance()', OBJECT)
+        body.beginControlFlow('if (!(instance instanceof $T))', X2C_ROOT_INDEX)
+        body.addStatement('return')
+        body.endControlFlow()
+        body.addStatement('$T moduleLayoutToGroup = new $T()', SPARSE_INT_ARRAY, SPARSE_INT_ARRAY)
+        body.addStatement('$T moduleGroupClassNames = new $T<>()', stringArray, SPARSE_ARRAY)
+        body.addStatement('(($T) instance).loadInto(moduleLayoutToGroup, moduleGroupClassNames)', X2C_ROOT_INDEX)
+        body.beginControlFlow('for (int i = 0; i < moduleLayoutToGroup.size(); i++)')
+        body.addStatement('int layoutId = moduleLayoutToGroup.keyAt(i)')
+        body.addStatement('int moduleGroupId = moduleLayoutToGroup.valueAt(i)')
+        body.addStatement('$T groupClassName = moduleGroupClassNames.get(moduleGroupId)', STRING)
+        body.beginControlFlow('if (groupClassName == null)')
+        body.addStatement('continue')
+        body.endControlFlow()
+        body.addStatement('layoutToGroup.put(layoutId, ensureGroup(groupClassNames, groupClassName))')
+        body.endControlFlow()
+        body.nextControlFlow('catch ($T ignored)', THROWABLE)
+        body.add('// Missing or incompatible module indexes should not block XML fallback.\n')
+        body.endControlFlow()
+
+        return MethodSpec.methodBuilder('loadModuleIndex')
+                .addModifiers(Modifier.PRIVATE, Modifier.STATIC)
+                .returns(TypeName.VOID)
+                .addParameter(STRING, 'className')
+                .addParameter(SPARSE_INT_ARRAY, 'layoutToGroup')
+                .addParameter(stringArray, 'groupClassNames')
+                .addCode(body.build())
+                .build()
+    }
+
+    private MethodSpec ensureGroupMethod() {
+        ParameterizedTypeName stringArray = ParameterizedTypeName.get(SPARSE_ARRAY, STRING)
+        CodeBlock.Builder body = CodeBlock.builder()
+        body.beginControlFlow('for (int i = 0; i < groupClassNames.size(); i++)')
+        body.addStatement('int key = groupClassNames.keyAt(i)')
+        body.beginControlFlow('if (groupClassName.equals(groupClassNames.valueAt(i)))')
+        body.addStatement('return key')
+        body.endControlFlow()
+        body.endControlFlow()
+        body.addStatement('int groupId = nextGroupId(groupClassNames)')
+        body.addStatement('groupClassNames.put(groupId, groupClassName)')
+        body.addStatement('return groupId')
+        return MethodSpec.methodBuilder('ensureGroup')
+                .addModifiers(Modifier.PRIVATE, Modifier.STATIC)
+                .returns(TypeName.INT)
+                .addParameter(stringArray, 'groupClassNames')
+                .addParameter(STRING, 'groupClassName')
+                .addCode(body.build())
+                .build()
+    }
+
+    private MethodSpec nextGroupIdMethod() {
+        ParameterizedTypeName stringArray = ParameterizedTypeName.get(SPARSE_ARRAY, STRING)
+        CodeBlock.Builder body = CodeBlock.builder()
+        body.addStatement('int next = 0')
+        body.beginControlFlow('for (int i = 0; i < groupClassNames.size(); i++)')
+        body.addStatement('next = Math.max(next, groupClassNames.keyAt(i) + 1)')
+        body.endControlFlow()
+        body.addStatement('return next')
+        return MethodSpec.methodBuilder('nextGroupId')
+                .addModifiers(Modifier.PRIVATE, Modifier.STATIC)
+                .returns(TypeName.INT)
+                .addParameter(stringArray, 'groupClassNames')
+                .addCode(body.build())
+                .build()
     }
 
     private boolean isMergeRoot(String layoutName) {
@@ -602,18 +795,23 @@ class JavaWriter {
         List<String> conditions = []
         qualifier.split('-').each { String token ->
             if (token == 'land') {
-                conditions.add('context.getResources().getConfiguration().orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE')
+                conditions.add("context.getResources().getConfiguration().orientation == ${CONFIGURATION.canonicalName()}.ORIENTATION_LANDSCAPE")
             } else if (token.startsWith('v') && token.substring(1).isInteger()) {
-                conditions.add("Build.VERSION.SDK_INT >= ${token.substring(1)}")
+                conditions.add("android.os.Build.VERSION.SDK_INT >= ${token.substring(1)}")
             }
         }
         conditions.isEmpty() ? null : conditions.join(' && ')
     }
 
-    private void writeJavaFile(String className, String source) {
-        File pkgDir = new File(outputDir, generatedPackage.replace('.', '/'))
-        pkgDir.mkdirs()
-        new File(pkgDir, className + '.java').text = source
+    private ClassName rClass() {
+        return ClassName.get(rPackage, 'R')
+    }
+
+    private void writeJavaFile(TypeSpec typeSpec) {
+        JavaFile.builder(generatedPackage, typeSpec)
+                .skipJavaLangImports(true)
+                .build()
+                .writeTo(outputDir)
     }
 
     private static String dispatcherName(String layoutName) {
@@ -650,18 +848,6 @@ class LayoutSpec {
         this.qualifier = qualifier
         this.file = file
         this.root = root
-    }
-}
-
-class AggregateGroupSpec {
-    final String groupClassName
-    final String rPackage
-    final List<String> layoutNames
-
-    AggregateGroupSpec(String groupClassName, String rPackage, Set<String> layoutNames) {
-        this.groupClassName = groupClassName
-        this.rPackage = rPackage
-        this.layoutNames = layoutNames.sort()
     }
 }
 

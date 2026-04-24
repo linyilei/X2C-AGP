@@ -25,6 +25,7 @@ pluginManagement {
 rootProject.name = "X2C-AGP"
 include ':app'
 include ':feature-demo'
+include ':feature-nested'
 if (System.getenv('JITPACK') == 'true') {
     include ':x2c-runtime'
 }

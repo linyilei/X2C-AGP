@@ -53,6 +53,17 @@
         app:layout_constraintStart_toStartOf="@id/header"
         app:layout_constraintTop_toBottomOf="@id/header" />
 
+    <include
+        android:id="@+id/merge_badge"
+        layout="@layout/include_merge_badge"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="14dp"
+        android:visibility="visible"
+        app:layout_constraintEnd_toEndOf="@id/feature_card"
+        app:layout_constraintStart_toStartOf="@id/feature_card"
+        app:layout_constraintTop_toBottomOf="@id/feature_card" />
+
     <androidx.recyclerview.widget.RecyclerView
         android:id="@+id/main_list"
         android:layout_width="0dp"
@@ -64,7 +75,7 @@
         app:layout_constraintBottom_toTopOf="@id/open_feature"
         app:layout_constraintEnd_toEndOf="@id/feature_card"
         app:layout_constraintStart_toStartOf="@id/feature_card"
-        app:layout_constraintTop_toBottomOf="@id/feature_card" />
+        app:layout_constraintTop_toBottomOf="@id/merge_badge" />
 
     <Button
         android:id="@+id/open_feature"

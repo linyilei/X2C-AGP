@@ -14,8 +14,9 @@ This project contains an initial SDK-style implementation for build-time layout 
 - `x2c-gradle-plugin`: standalone Gradle plugin implementation, exposed as `io.github.linyilei.x2c`.
 - `app`: host demo app.
 - `feature-demo`: Android library demo module.
+- `feature-nested`: transitive Android library demo module used by `feature-demo` to exercise `app -> feature-demo -> feature-nested` root-index aggregation.
 
-The plugin supports both application and Android library modules. Library modules generate their own group. Application modules generate a root index that maps layout IDs to groups from direct project dependencies, then runtime loads each group lazily on first use.
+The plugin supports both application and Android library modules. Library modules generate their own group and module index. Application modules scan the dependency classpath for module indexes, merge them into the app root index, then runtime loads each group lazily on first use.
 
 ## Published Artifacts
 
@@ -116,9 +117,9 @@ dependencies {
 }
 ```
 
-Each Android library generates its own `X2CGroup` under `<manifest package>.x2c`. Application modules generate an app-level `X2CRootIndex` and only load a library group when a layout from that group is requested.
+Each Android library generates its own `X2CGroup` and `X2CModuleIndex` under `<manifest package>.x2c`. Application modules generate an app-level `X2CRootIndex`, scan dependency classes/jars/AARs for `X2CModuleIndex`, and only load a library group when a layout from that group is requested.
 
-This allows app layouts to include a normal-root layout from a feature/library module. Cross-module root `merge` include is not handled yet because the app generator does not inspect dependency module layout metadata.
+This allows app layouts to include a normal-root layout from a feature/library module. When an included target layout has a root `<merge>` and the include tag carries its own `LayoutParams`, `android:id`, or `android:visibility`, X2C creates a wrapper container for those include-tag attributes and inflates the merge children inside it.
 
 ## Repository Development Mode
 
@@ -130,7 +131,6 @@ This repository keeps two resolution modes:
 ## Current Limits
 
 - `fragment` and `requestFocus` tags are skipped and fall back to normal XML inflation.
-- Root `merge` is supported for direct `X2C.inflate(..., parent, true)`, but `merge` included inside `ConstraintLayout` does not yet apply include-tag constraints as a virtual wrapper. Prefer a normal root container for ConstraintLayout includes until this is implemented.
 - Variant dispatch currently supports default, `land`, and `vNN` qualifiers.
-- App-level root indexing includes direct project dependencies that apply `io.github.linyilei.x2c`; deeper dependency chains are not automatically indexed yet, so the host app should directly depend on modules whose layouts need X2C.
+- App-level root indexing consumes dependency `X2CModuleIndex` classes from project dependencies and remote AARs; AARs that do not contain a module index cannot be auto-indexed.
 - DataBinding and preloading are intentionally out of scope for this phase.
