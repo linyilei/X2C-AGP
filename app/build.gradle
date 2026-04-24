@@ -5,6 +5,7 @@ plugins {
 apply plugin: 'com.android.application'
 
 def useRemoteX2c = System.getenv('JITPACK') != 'true'
+def x2cVersion = '0.1.1'
 
 android {
     compileSdkVersion 30
@@ -17,6 +18,11 @@ android {
         versionName "1.0"
 
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+        javaCompileOptions {
+            annotationProcessorOptions {
+                arguments = [AROUTER_MODULE_NAME: project.getName()]
+            }
+        }
     }
 
     buildTypes {
@@ -33,13 +39,15 @@ android {
 
 dependencies {
     implementation useRemoteX2c
-            ? 'com.github.linyilei.X2C-AGP:x2c-runtime:v0.1.0'
+            ? "com.github.linyilei.X2C-AGP:x2c-runtime:${x2cVersion}"
             : project(':x2c-runtime')
     implementation project(':feature-demo')
     implementation 'androidx.appcompat:appcompat:1.3.0'
     implementation 'com.google.android.material:material:1.4.0'
     implementation 'androidx.constraintlayout:constraintlayout:2.0.4'
     implementation 'androidx.recyclerview:recyclerview:1.2.1'
+    implementation 'com.alibaba:arouter-api:1.5.2'
+    annotationProcessor 'com.alibaba:arouter-compiler:1.5.2'
     testImplementation 'junit:junit:4.13.2'
     androidTestImplementation 'androidx.test.ext:junit:1.1.3'
     androidTestImplementation 'androidx.test.espresso:espresso-core:3.4.0'

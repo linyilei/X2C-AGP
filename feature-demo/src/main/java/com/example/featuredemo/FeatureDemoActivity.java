@@ -8,11 +8,14 @@ import android.widget.TextView;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
+import com.alibaba.android.arouter.facade.annotation.Route;
+
 import io.github.linyilei.x2c.runtime.X2C;
 
 import java.util.Arrays;
 import java.util.List;
 
+@Route(path = FeatureRoutes.FEATURE_DEMO)
 public class FeatureDemoActivity extends Activity {
 
     @Override
@@ -27,7 +30,7 @@ public class FeatureDemoActivity extends Activity {
                 "card item 4：ConstraintLayout.LayoutParams 来自 XML"
         ));
         bindList(R.id.feature_activity_list, Arrays.asList(
-                "activity item 1：activity_feature_demo 由 library X2CGroup 创建",
+                "activity item 1：activity_feature_demo 由 ARouter 拦截器提前预加载",
                 "activity item 2：页面内 include 复用 feature_card",
                 "activity item 3：点击下方按钮 finish 返回主模块"
         ));

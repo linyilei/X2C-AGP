@@ -5,16 +5,19 @@ import android.content.Context;
 import android.util.Log;
 import android.util.SparseArray;
 import android.util.SparseIntArray;
+import android.view.ContextThemeWrapper;
 import android.view.InflateException;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
 
+import java.lang.reflect.Field;
 import java.util.HashMap;
 import java.util.Map;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
+import androidx.annotation.StyleRes;
 
 public final class X2C {
 
@@ -24,7 +27,10 @@ public final class X2C {
     private static volatile RootIndex sRootIndex;
     private static volatile boolean sRootIndexLookupAttempted;
     private static final Map<String, SparseArray<IViewFactory>> sLoadedGroups = new HashMap<>();
+    private static final SparseArray<View> sPreloadedViews = new SparseArray<>();
     private static volatile boolean sDebugLogging;
+    private static volatile Field sViewContextField;
+    private static volatile boolean sViewContextFieldLookupAttempted;
 
     private X2C() {
     }
@@ -37,6 +43,7 @@ public final class X2C {
             }
             sRootIndexLookupAttempted = rootIndex != null;
             sLoadedGroups.clear();
+            sPreloadedViews.clear();
         }
         log("Installed custom root index: " + (rootIndex == null ? "null" : rootIndex.getClass().getName()));
     }
@@ -73,8 +80,58 @@ public final class X2C {
         return inflate(inflater.getContext(), layoutId, parent, attachToParent);
     }
 
+    @NonNull
+    public static Context withTheme(@NonNull Context context, @StyleRes int themeResId) {
+        return new ContextThemeWrapper(context.getApplicationContext(), themeResId);
+    }
+
+    public static boolean preload(@NonNull Context context, int layoutId) {
+        return preloadView(context, layoutId) != null;
+    }
+
+    @Nullable
+    private static View preloadView(@NonNull Context context, int layoutId) {
+        try {
+            View view = createGeneratedView(context, layoutId, null, false);
+            if (view == null) {
+                log("preload fallback XML: " + resourceName(context, layoutId));
+                return null;
+            }
+            synchronized (X2C.class) {
+                sPreloadedViews.put(layoutId, view);
+            }
+            log("preload cached generated view: " + resourceName(context, layoutId));
+            return view;
+        } catch (RuntimeException e) {
+            log("preload failed: " + resourceName(context, layoutId) + ", " + e.getClass().getName());
+            return null;
+        }
+    }
+
+    public static void clearPreload(int layoutId) {
+        synchronized (X2C.class) {
+            sPreloadedViews.remove(layoutId);
+        }
+    }
+
+    public static void clearPreloads() {
+        synchronized (X2C.class) {
+            sPreloadedViews.clear();
+        }
+    }
+
     @Nullable
     static View getView(@NonNull Context context, int layoutId, @Nullable ViewGroup parent, boolean attachToParent) {
+        View preloaded = consumePreloadedView(context, layoutId, parent, attachToParent);
+        if (preloaded != null) {
+            return preloaded;
+        }
+        return createGeneratedView(context, layoutId, parent, attachToParent);
+    }
+
+    @Nullable
+    private static View createGeneratedView(@NonNull Context context, int layoutId, @Nullable ViewGroup parent,
+                                            boolean attachToParent) {
         IViewFactory factory = resolveFactory(context, layoutId);
         if (factory == null) {
             return null;
@@ -88,6 +145,34 @@ public final class X2C {
         } catch (RuntimeException e) {
             throw new InflateException("Failed to inflate layout " + layoutId + " through generated factory.", e);
         }
+    }
+
+    @Nullable
+    private static View consumePreloadedView(@NonNull Context context, int layoutId, @Nullable ViewGroup parent,
+                                             boolean attachToParent) {
+        if (parent != null || attachToParent) {
+            return null;
+        }
+        View view;
+        synchronized (X2C.class) {
+            view = sPreloadedViews.get(layoutId);
+            if (view != null) {
+                sPreloadedViews.remove(layoutId);
+            }
+        }
+        if (view == null) {
+            return null;
+        }
+        if (view.getParent() != null) {
+            log("preload discarded attached view: " + resourceName(context, layoutId));
+            return null;
+        }
+        if (!replaceViewTreeContext(view, context)) {
+            log("preload discarded because View.mContext replacement failed: " + resourceName(context, layoutId));
+            return null;
+        }
+        log("preload consumed generated view: " + resourceName(context, layoutId));
+        return view;
     }
 
     @Nullable
@@ -197,6 +282,51 @@ public final class X2C {
     private static void log(@NonNull String message) {
         if (sDebugLogging) {
             Log.d(TAG, message);
+        }
+    }
+
+    private static boolean replaceViewTreeContext(@NonNull View view, @NonNull Context context) {
+        Field field = resolveViewContextField();
+        if (field == null) {
+            return false;
+        }
+        try {
+            replaceViewTreeContext(view, context, field);
+            return true;
+        } catch (IllegalAccessException ignored) {
+            return false;
+        }
+    }
+
+    private static void replaceViewTreeContext(@NonNull View view, @NonNull Context context, @NonNull Field field)
+            throws IllegalAccessException {
+        field.set(view, context);
+        if (!(view instanceof ViewGroup)) {
+            return;
+        }
+        ViewGroup group = (ViewGroup) view;
+        for (int i = 0; i < group.getChildCount(); i++) {
+            replaceViewTreeContext(group.getChildAt(i), context, field);
+        }
+    }
+
+    @Nullable
+    private static Field resolveViewContextField() {
+        if (sViewContextField != null || sViewContextFieldLookupAttempted) {
+            return sViewContextField;
+        }
+        synchronized (X2C.class) {
+            if (!sViewContextFieldLookupAttempted) {
+                try {
+                    Field field = View.class.getDeclaredField("mContext");
+                    field.setAccessible(true);
+                    sViewContextField = field;
+                } catch (Exception ignored) {
+                    sViewContextField = null;
+                }
+                sViewContextFieldLookupAttempted = true;
+            }
+            return sViewContextField;
         }
     }
 

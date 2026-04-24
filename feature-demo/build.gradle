@@ -5,6 +5,7 @@ plugins {
 apply plugin: 'com.android.library'
 
 def useRemoteX2c = System.getenv('JITPACK') != 'true'
+def x2cVersion = '0.1.1'
 
 android {
     compileSdkVersion 30
@@ -12,6 +13,11 @@ android {
     defaultConfig {
         minSdkVersion 19
         targetSdkVersion 30
+        javaCompileOptions {
+            annotationProcessorOptions {
+                arguments = [AROUTER_MODULE_NAME: project.getName()]
+            }
+        }
     }
 
     buildTypes {
@@ -29,9 +35,11 @@ android {
 
 dependencies {
     implementation useRemoteX2c
-            ? 'com.github.linyilei.X2C-AGP:x2c-runtime:v0.1.0'
+            ? "com.github.linyilei.X2C-AGP:x2c-runtime:${x2cVersion}"
             : project(':x2c-runtime')
     implementation project(':feature-nested')
     implementation 'androidx.constraintlayout:constraintlayout:2.0.4'
     implementation 'androidx.recyclerview:recyclerview:1.2.1'
+    implementation 'com.alibaba:arouter-api:1.5.2'
+    annotationProcessor 'com.alibaba:arouter-compiler:1.5.2'
 }
