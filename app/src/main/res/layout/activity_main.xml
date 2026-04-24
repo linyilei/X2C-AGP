@@ -1,0 +1,89 @@
+<?xml version="1.0" encoding="utf-8"?>
+<androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#F7F3EA"
+    android:padding="24dp"
+    tools:context=".MainActivity"
+    tools:x2c="standard">
+
+    <TextView
+        android:id="@+id/title"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:text="X2C-AGP Demo"
+        android:textColor="#1E2B24"
+        android:textSize="22sp"
+        android:textStyle="bold"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toTopOf="parent" />
+
+    <TextView
+        android:id="@+id/subtitle"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="6dp"
+        android:text="主工程页面：ConstraintLayout + RecyclerView + 跨模块 include"
+        android:textColor="#66736C"
+        android:textSize="14sp"
+        app:layout_constraintEnd_toEndOf="@id/title"
+        app:layout_constraintStart_toStartOf="@id/title"
+        app:layout_constraintTop_toBottomOf="@id/title" />
+
+    <include
+        android:id="@+id/header"
+        layout="@layout/include_header"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="18dp"
+        app:layout_constraintEnd_toEndOf="@id/subtitle"
+        app:layout_constraintStart_toStartOf="@id/subtitle"
+        app:layout_constraintTop_toBottomOf="@id/subtitle" />
+
+    <include
+        android:id="@+id/feature_card"
+        layout="@layout/feature_card"
+        android:layout_width="0dp"
+        android:layout_height="220dp"
+        android:layout_marginTop="14dp"
+        app:layout_constraintEnd_toEndOf="@id/header"
+        app:layout_constraintStart_toStartOf="@id/header"
+        app:layout_constraintTop_toBottomOf="@id/header" />
+
+    <androidx.recyclerview.widget.RecyclerView
+        android:id="@+id/main_list"
+        android:layout_width="0dp"
+        android:layout_height="0dp"
+        android:layout_marginTop="14dp"
+        android:background="#FFFFFF"
+        android:clipToPadding="false"
+        android:padding="8dp"
+        app:layout_constraintBottom_toTopOf="@id/open_feature"
+        app:layout_constraintEnd_toEndOf="@id/feature_card"
+        app:layout_constraintStart_toStartOf="@id/feature_card"
+        app:layout_constraintTop_toBottomOf="@id/feature_card" />
+
+    <Button
+        android:id="@+id/open_feature"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="14dp"
+        android:text="打开子模块 Activity"
+        app:layout_constraintBottom_toTopOf="@id/action_area"
+        app:layout_constraintEnd_toEndOf="@id/main_list"
+        app:layout_constraintStart_toStartOf="@id/main_list" />
+
+    <include
+        android:id="@+id/action_area"
+        layout="@layout/include_actions"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="10dp"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintEnd_toEndOf="@id/open_feature"
+        app:layout_constraintStart_toStartOf="@id/open_feature" />
+
+</androidx.constraintlayout.widget.ConstraintLayout>

@@ -1,0 +1,26 @@
+# macOS
+.DS_Store
+
+# Gradle
+.gradle/
+**/.gradle/
+build/
+*/build/
+
+# Android SDK / local machine config
+local.properties
+
+# Android Studio / IntelliJ
+.idea/
+*.iml
+
+# NDK / CMake
+.externalNativeBuild/
+.cxx/
+
+# Screenshots and other generated captures
+captures/
+
+# APK / AAB outputs if copied outside build/
+*.apk
+*.aab

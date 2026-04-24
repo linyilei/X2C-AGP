@@ -1,0 +1,74 @@
+plugins {
+    id 'groovy'
+    id 'java-gradle-plugin'
+    id 'maven-publish'
+}
+
+group = System.getenv('JITPACK_GROUP') ?: 'com.github.linyilei.X2C-AGP'
+version = System.getenv('VERSION') ?: '0.1.0'
+
+repositories {
+    google()
+    mavenCentral()
+    gradlePluginPortal()
+}
+
+dependencies {
+    implementation gradleApi()
+    implementation localGroovy()
+}
+
+gradlePlugin {
+    plugins {
+        x2c {
+            id = 'io.github.linyilei.x2c'
+            implementationClass = 'io.github.linyilei.x2c.gradle.X2cPlugin'
+        }
+    }
+}
+
+sourceCompatibility = JavaVersion.VERSION_1_8
+targetCompatibility = JavaVersion.VERSION_1_8
+
+java {
+    withSourcesJar()
+    withJavadocJar()
+}
+
+tasks.withType(Javadoc) {
+    failOnError false
+}
+
+publishing {
+    repositories {
+        // JitPack runs publishToMavenLocal and serves artifacts from ~/.m2.
+    }
+}
+
+afterEvaluate {
+    publishing.publications.withType(MavenPublication).all { publication ->
+        pom {
+            name = publication.name == 'pluginMaven' ? 'X2C Gradle Plugin' : 'X2C Gradle Plugin Marker'
+            description = 'Gradle plugin for Android build-time layout generation.'
+            url = 'https://github.com/linyilei/X2C-AGP'
+            licenses {
+                license {
+                    name = 'The MIT License'
+                    url = 'https://opensource.org/licenses/MIT'
+                }
+            }
+            developers {
+                developer {
+                    id = 'linyilei'
+                    name = 'linyilei'
+                }
+            }
+            scm {
+                connection = 'scm:git:https://github.com/linyilei/X2C-AGP.git'
+                developerConnection = 'scm:git:ssh://git@github.com/linyilei/X2C-AGP.git'
+                url = 'https://github.com/linyilei/X2C-AGP'
+            }
+        }
+    }
+
+}

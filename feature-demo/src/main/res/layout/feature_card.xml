@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="utf-8"?>
+<androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="220dp"
+    android:background="#DDF2FF"
+    android:padding="16dp"
+    tools:x2c="standard">
+
+    <TextView
+        android:id="@+id/feature_title"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:text="feature-demo library X2C 布局"
+        android:textColor="#0A3550"
+        android:textSize="17sp"
+        android:textStyle="bold"
+        app:layout_constraintEnd_toStartOf="@id/feature_badge"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toTopOf="parent" />
+
+    <TextView
+        android:id="@+id/feature_badge"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:background="#166C9B"
+        android:paddingLeft="10dp"
+        android:paddingTop="4dp"
+        android:paddingRight="10dp"
+        android:paddingBottom="4dp"
+        android:text="LIB"
+        android:textColor="#FFFFFF"
+        android:textSize="12sp"
+        app:layout_constraintBaseline_toBaselineOf="@id/feature_title"
+        app:layout_constraintEnd_toEndOf="parent" />
+
+    <TextView
+        android:id="@+id/feature_subtitle"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="6dp"
+        android:text="App root 索引会按需加载 library 生成的 X2CGroup；下面是 RecyclerView。"
+        android:textColor="#35566B"
+        android:textSize="13sp"
+        app:layout_constraintEnd_toEndOf="@id/feature_badge"
+        app:layout_constraintStart_toStartOf="@id/feature_title"
+        app:layout_constraintTop_toBottomOf="@id/feature_title" />
+
+    <androidx.recyclerview.widget.RecyclerView
+        android:id="@+id/feature_list"
+        android:layout_width="0dp"
+        android:layout_height="0dp"
+        android:layout_marginTop="12dp"
+        android:background="#FFFFFF"
+        android:clipToPadding="false"
+        android:padding="6dp"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintEnd_toEndOf="@id/feature_subtitle"
+        app:layout_constraintStart_toStartOf="@id/feature_subtitle"
+        app:layout_constraintTop_toBottomOf="@id/feature_subtitle" />
+
+</androidx.constraintlayout.widget.ConstraintLayout>

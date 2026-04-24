@@ -1,0 +1,30 @@
+pluginManagement {
+    if (System.getenv('JITPACK') == 'true') {
+        includeBuild 'x2c-gradle-plugin'
+    }
+    repositories {
+        google()
+        mavenCentral()
+        gradlePluginPortal()
+        if (System.getenv('JITPACK') != 'true') {
+            maven { url 'https://jitpack.io' }
+        }
+    }
+    plugins {
+        id 'io.github.linyilei.x2c' version 'v0.1.0'
+    }
+    resolutionStrategy {
+        eachPlugin {
+            if (System.getenv('JITPACK') != 'true' && requested.id.id == 'io.github.linyilei.x2c') {
+                useModule('com.github.linyilei.X2C-AGP:x2c-gradle-plugin:v0.1.0')
+            }
+        }
+    }
+}
+
+rootProject.name = "X2C-AGP"
+include ':app'
+include ':feature-demo'
+if (System.getenv('JITPACK') == 'true') {
+    include ':x2c-runtime'
+}

@@ -1,0 +1,10 @@
+jdk:
+  - openjdk11
+
+env:
+  JITPACK: true
+  JITPACK_GROUP: com.github.linyilei.X2C-AGP
+
+install:
+  - ./gradlew --no-daemon :x2c-runtime:publishReleasePublicationToMavenLocal
+  - ./gradlew --no-daemon -p x2c-gradle-plugin publishToMavenLocal

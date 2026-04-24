@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="utf-8"?>
+<androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#EEF7FB"
+    android:padding="24dp"
+    tools:x2c="standard">
+
+    <TextView
+        android:id="@+id/feature_page_title"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:text="子模块 Activity"
+        android:textColor="#0A3550"
+        android:textSize="24sp"
+        android:textStyle="bold"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toTopOf="parent" />
+
+    <TextView
+        android:id="@+id/feature_page_subtitle"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:text="这个页面来自 feature-demo library，并使用 X2C.inflate 加载。"
+        android:textColor="#4A6A7D"
+        android:textSize="14sp"
+        app:layout_constraintEnd_toEndOf="@id/feature_page_title"
+        app:layout_constraintStart_toStartOf="@id/feature_page_title"
+        app:layout_constraintTop_toBottomOf="@id/feature_page_title" />
+
+    <include
+        android:id="@+id/feature_activity_card"
+        layout="@layout/feature_card"
+        android:layout_width="0dp"
+        android:layout_height="240dp"
+        android:layout_marginTop="18dp"
+        app:layout_constraintEnd_toEndOf="@id/feature_page_subtitle"
+        app:layout_constraintStart_toStartOf="@id/feature_page_subtitle"
+        app:layout_constraintTop_toBottomOf="@id/feature_page_subtitle" />
+
+    <androidx.recyclerview.widget.RecyclerView
+        android:id="@+id/feature_activity_list"
+        android:layout_width="0dp"
+        android:layout_height="0dp"
+        android:layout_marginTop="16dp"
+        android:background="#FFFFFF"
+        android:clipToPadding="false"
+        android:padding="8dp"
+        app:layout_constraintBottom_toTopOf="@id/feature_back"
+        app:layout_constraintEnd_toEndOf="@id/feature_activity_card"
+        app:layout_constraintStart_toStartOf="@id/feature_activity_card"
+        app:layout_constraintTop_toBottomOf="@id/feature_activity_card" />
+
+    <Button
+        android:id="@+id/feature_back"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="14dp"
+        android:text="返回主模块"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintEnd_toEndOf="@id/feature_activity_list"
+        app:layout_constraintStart_toStartOf="@id/feature_activity_list" />
+
+</androidx.constraintlayout.widget.ConstraintLayout>
