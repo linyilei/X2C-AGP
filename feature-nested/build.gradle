@@ -5,6 +5,7 @@ plugins {
 apply plugin: 'com.android.library'
 
 def useRemoteX2c = System.getenv('JITPACK') != 'true'
+def x2cVersion = '0.1.1'
 
 android {
     compileSdkVersion 30
@@ -29,7 +30,7 @@ android {
 
 dependencies {
     implementation useRemoteX2c
-            ? 'com.github.linyilei.X2C-AGP:x2c-runtime:v0.1.0'
+            ? "com.github.linyilei.X2C-AGP:x2c-runtime:${x2cVersion}"
             : project(':x2c-runtime')
     implementation 'androidx.constraintlayout:constraintlayout:2.0.4'
 }

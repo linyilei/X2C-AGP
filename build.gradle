@@ -11,6 +11,9 @@ buildscript {
 
 allprojects {
     repositories {
+        if (System.getenv('JITPACK') != 'true') {
+            mavenLocal()
+        }
         google()
         mavenCentral()
         if (System.getenv('JITPACK') != 'true') {

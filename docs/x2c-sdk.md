@@ -20,10 +20,10 @@ The plugin supports both application and Android library modules. Library module
 
 ## Published Artifacts
 
-- `com.github.linyilei.X2C-AGP:x2c-runtime:v0.1.0`
-- `com.github.linyilei.X2C-AGP:x2c-gradle-plugin:v0.1.0`
+- `com.github.linyilei.X2C-AGP:x2c-runtime:0.1.1`
+- `com.github.linyilei.X2C-AGP:x2c-gradle-plugin:0.1.1`
 
-Both artifacts are configured for JitPack. The Gradle plugin id remains `io.github.linyilei.x2c`; the implementation artifact is resolved from JitPack.
+Both artifacts are configured for local Maven and JitPack. The Gradle plugin id remains `io.github.linyilei.x2c`; local sample builds resolve the implementation artifact from `mavenLocal()` first.
 
 ## App Integration
 
@@ -38,7 +38,7 @@ pluginManagement {
         maven { url 'https://jitpack.io' }
     }
     plugins {
-        id 'io.github.linyilei.x2c' version 'v0.1.0'
+        id 'io.github.linyilei.x2c' version '0.1.1'
     }
     resolutionStrategy {
         eachPlugin {
@@ -60,7 +60,7 @@ plugins {
 apply plugin: 'com.android.application'
 
 dependencies {
-    implementation 'com.github.linyilei.X2C-AGP:x2c-runtime:v0.1.0'
+    implementation 'com.github.linyilei.X2C-AGP:x2c-runtime:0.1.1'
 }
 ```
 
@@ -83,6 +83,49 @@ X2C.setContentView(this, R.layout.activity_main);
 ```
 
 For `include`, the plugin follows referenced layouts recursively. Included layouts do not need their own `tools:x2c` marker.
+
+## ARouter Preload Integration
+
+Preloading fits two moments: startup tasks can preload the home layout, and an ARouter interceptor can preload the next Activity layout before navigation. X2C keeps routing out of the core runtime; the interceptor locates the destination layout from route metadata, path, or destination class, then asks X2C to pre-create and cache the generated view before navigation continues:
+
+```java
+public final class X2CStartupTask implements Runnable {
+    private final Context applicationContext;
+
+    public X2CStartupTask(Context context) {
+        applicationContext = context.getApplicationContext();
+    }
+
+    @Override
+    public void run() {
+        Context preloadContext = X2C.withTheme(applicationContext, R.style.Theme_X2cDemo);
+        X2C.preload(preloadContext, R.layout.activity_main);
+    }
+}
+```
+
+```java
+@Interceptor(priority = 1, name = "X2C preload")
+public final class X2CPreloadInterceptor implements IInterceptor {
+    private Context applicationContext;
+
+    @Override
+    public void init(Context context) {
+        applicationContext = context.getApplicationContext();
+    }
+
+    @Override
+    public void process(Postcard postcard, InterceptorCallback callback) {
+        if (FeatureRoutes.FEATURE_DEMO.equals(postcard.getPath())) {
+            Context preloadContext = X2C.withTheme(applicationContext, R.style.Theme_X2cDemo);
+            X2C.preload(preloadContext, com.example.featuredemo.R.layout.activity_feature_demo);
+        }
+        callback.onContinue(postcard);
+    }
+}
+```
+
+`X2C.preload(context, layoutId)` resolves the generated factory, calls `factory.createView(context, null, false)`, and caches the result. The destination page can keep using `X2C.setContentView(activity, layoutId)` or `X2C.inflate(activity, layoutId, null, false)`; X2C consumes the cached view first and recursively replaces the preloaded ViewTree `View.mContext` with the current Activity context before the view is attached. Missing generated factories, `<merge>` roots that need a parent, reflection failures, or pre-create failures fall back to normal creation, so the interceptor can always continue routing.
 
 ## Runtime Verification
 
@@ -113,7 +156,7 @@ apply plugin: 'com.android.library'
 apply plugin: 'io.github.linyilei.x2c'
 
 dependencies {
-    implementation 'com.github.linyilei.X2C-AGP:x2c-runtime:v0.1.0'
+    implementation 'com.github.linyilei.X2C-AGP:x2c-runtime:0.1.1'
 }
 ```
 
@@ -125,7 +168,7 @@ This allows app layouts to include a normal-root layout from a feature/library m
 
 This repository keeps two resolution modes:
 
-- Default local sample builds resolve both the plugin and runtime from remote JitPack.
+- Default local sample builds resolve both the plugin and runtime from `mavenLocal()` first, then remote JitPack.
 - Only when `JITPACK=true` is present does the repository switch back to local `includeBuild('x2c-gradle-plugin')` and local `:x2c-runtime`, so JitPack can build and publish the current tag from source.
 
 ## Current Limits
@@ -133,4 +176,4 @@ This repository keeps two resolution modes:
 - `fragment` and `requestFocus` tags are skipped and fall back to normal XML inflation.
 - Variant dispatch currently supports default, `land`, and `vNN` qualifiers.
 - App-level root indexing consumes dependency `X2CModuleIndex` classes from project dependencies and remote AARs; AARs that do not contain a module index cannot be auto-indexed.
-- DataBinding and preloading are intentionally out of scope for this phase.
+- DataBinding is intentionally out of scope for this phase.

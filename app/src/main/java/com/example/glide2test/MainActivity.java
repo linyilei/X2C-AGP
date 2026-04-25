@@ -4,13 +4,14 @@ import androidx.appcompat.app.AppCompatActivity;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
-import android.content.Intent;
 import android.os.Bundle;
 import android.view.ViewGroup;
 import android.widget.TextView;
 
+import com.alibaba.android.arouter.launcher.ARouter;
+import com.example.featuredemo.FeatureRoutes;
+
 import io.github.linyilei.x2c.runtime.X2C;
-import com.example.featuredemo.FeatureDemoActivity;
 
 import java.util.Arrays;
 import java.util.List;
@@ -28,7 +29,8 @@ public class MainActivity extends AppCompatActivity {
                 "主模块 item 1：activity_main 命中 app 生成的 X2CGroup",
                 "主模块 item 2：feature_card 通过 root 索引懒加载 library group",
                 "主模块 item 3：feature_card 内部 include feature-nested，验证 app→feature-demo→feature-nested",
-                "主模块 item 4：merge include 使用包装层承载 include 标签约束"
+                "主模块 item 4：merge include 使用包装层承载 include 标签约束",
+                "主模块 item 5：ARouter 拦截器会在跳转前预加载 activity_feature_demo"
         )));
 
         RecyclerView featureList = findViewById(com.example.featuredemo.R.id.feature_list);
@@ -40,7 +42,7 @@ public class MainActivity extends AppCompatActivity {
         )));
 
         findViewById(R.id.open_feature).setOnClickListener(v ->
-                startActivity(new Intent(this, FeatureDemoActivity.class)));
+                ARouter.getInstance().build(FeatureRoutes.FEATURE_DEMO).navigation());
     }
 
     private static class TextAdapter extends RecyclerView.Adapter<TextHolder> {

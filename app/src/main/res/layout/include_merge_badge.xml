@@ -16,8 +16,8 @@
         android:text="merge include：include 标签上的约束/id/visibility 由包装层承载"
         android:textColor="#352266"
         android:textSize="13sp"
-        app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toTopOf="parent" />
+        app:layout_constraintTop_toBottomOf="@id/feature_card"
+        app:layout_constraintStart_toStartOf="@id/feature_card"
+        app:layout_constraintEnd_toEndOf="@id/feature_card" />
 
 </merge>
