@@ -9,6 +9,8 @@ buildscript {
     }
 }
 
+ext.x2cMode = 'annotation'
+
 allprojects {
     repositories {
         if (System.getenv('JITPACK') != 'true') {

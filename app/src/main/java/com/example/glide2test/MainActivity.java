@@ -12,10 +12,12 @@ import com.alibaba.android.arouter.launcher.ARouter;
 import com.example.featuredemo.FeatureRoutes;
 
 import io.github.linyilei.x2c.runtime.X2C;
+import io.github.linyilei.x2c.runtime.Xml;
 
 import java.util.Arrays;
 import java.util.List;
 
+@Xml(layouts = "activity_main")
 public class MainActivity extends AppCompatActivity {
 
     @Override
@@ -29,8 +31,8 @@ public class MainActivity extends AppCompatActivity {
                 "主模块 item 1：activity_main 命中 app 生成的 X2CGroup",
                 "主模块 item 2：feature_card 通过 root 索引懒加载 library group",
                 "主模块 item 3：feature_card 内部 include feature-nested，验证 app→feature-demo→feature-nested",
-                "主模块 item 4：merge include 使用包装层承载 include 标签约束",
-                "主模块 item 5：ARouter 拦截器会在跳转前预加载 activity_feature_demo"
+                "主模块 item 4：merge include 子节点直接挂到父容器，约束写在真实子 View 上",
+                "主模块 item 5：ARouter 拦截器会在跳转前预热 activity_feature_demo 的生成路径"
         )));
 
         RecyclerView featureList = findViewById(com.example.featuredemo.R.id.feature_list);

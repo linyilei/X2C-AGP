@@ -25,7 +25,7 @@
         android:layout_width="0dp"
         android:layout_height="wrap_content"
         android:layout_marginTop="8dp"
-        android:text="这个页面由 ARouter 打开，跳转前通过拦截器预加载 X2C 布局。"
+        android:text="这个页面由 ARouter 打开，跳转前通过拦截器预热 X2C 生成路径。"
         android:textColor="#4A6A7D"
         android:textSize="14sp"
         app:layout_constraintEnd_toEndOf="@id/feature_page_title"

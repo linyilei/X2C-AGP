@@ -5,7 +5,7 @@
     tools:x2c="standard">
 
     <TextView
-        android:id="@+id/merge_badge_title"
+        android:id="@+id/merge_badge"
         android:layout_width="0dp"
         android:layout_height="wrap_content"
         android:background="#EDE7FF"
@@ -13,7 +13,7 @@
         android:paddingTop="8dp"
         android:paddingRight="12dp"
         android:paddingBottom="8dp"
-        android:text="merge include：include 标签上的约束/id/visibility 由包装层承载"
+        android:text="merge include：子节点直接挂到父容器，include 标签自身约束不会生效"
         android:textColor="#352266"
         android:textSize="13sp"
         app:layout_constraintTop_toBottomOf="@id/feature_card"

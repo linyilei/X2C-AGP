@@ -75,7 +75,7 @@
         app:layout_constraintBottom_toTopOf="@id/open_feature"
         app:layout_constraintEnd_toEndOf="@id/feature_card"
         app:layout_constraintStart_toStartOf="@id/feature_card"
-        app:layout_constraintTop_toBottomOf="@id/merge_badge_title" />
+        app:layout_constraintTop_toBottomOf="@id/merge_badge" />
 
     <Button
         android:id="@+id/open_feature"
