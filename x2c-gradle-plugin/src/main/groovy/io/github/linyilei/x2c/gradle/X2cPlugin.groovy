@@ -82,6 +82,9 @@ class X2cPlugin implements Plugin<Project> {
         } else if (sourceSet.hasProperty('java') && sourceSet.java?.hasProperty('srcDirs')) {
             sourceDirs.addAll(sourceSet.java.srcDirs.findAll { File dir -> dir != null })
         }
+        if (sourceSet.hasProperty('kotlin') && sourceSet.kotlin?.hasProperty('srcDirs')) {
+            sourceDirs.addAll(sourceSet.kotlin.srcDirs.findAll { File dir -> dir != null })
+        }
         String sourceSetName = sourceSet.hasProperty('name') ? sourceSet.name : 'main'
         File conventionalKotlinDir = project.file("src/${sourceSetName}/kotlin")
         if (conventionalKotlinDir.exists()) {
