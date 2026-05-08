@@ -10,6 +10,8 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      USE_LOCAL_X2C: true
 
     steps:
       - name: Checkout
@@ -25,7 +27,7 @@ jobs:
         run: ./gradlew --no-daemon :app:compileDebugJavaWithJavac
 
       - name: Verify runtime publication metadata
-        run: JITPACK=true ./gradlew --no-daemon :x2c-runtime:generatePomFileForReleasePublication
+        run: ./gradlew --no-daemon :x2c-runtime:generatePomFileForReleasePublication
 
       - name: Verify plugin publication metadata
         run: ./gradlew --no-daemon -p x2c-gradle-plugin generatePomFileForPluginMavenPublication

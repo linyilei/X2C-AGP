@@ -1,25 +1,26 @@
 pluginManagement {
-    if (System.getenv('JITPACK') == 'true') {
+    def useLocalX2c = System.getenv('USE_LOCAL_X2C') == 'true' || System.getenv('JITPACK') == 'true'
+    if (useLocalX2c) {
         includeBuild 'x2c-gradle-plugin'
     }
     repositories {
-        if (System.getenv('JITPACK') != 'true') {
+        if (!useLocalX2c) {
             mavenLocal()
         }
         google()
         mavenCentral()
         gradlePluginPortal()
-        if (System.getenv('JITPACK') != 'true') {
+        if (!useLocalX2c) {
             maven { url 'https://jitpack.io' }
         }
     }
     plugins {
-        id 'io.github.linyilei.x2c' version '0.1.1'
+        id 'io.github.linyilei.x2c' version 'v0.1.1'
     }
     resolutionStrategy {
         eachPlugin {
-            if (System.getenv('JITPACK') != 'true' && requested.id.id == 'io.github.linyilei.x2c') {
-                useModule('com.github.linyilei.X2C-AGP:x2c-gradle-plugin:0.1.1')
+            if (!useLocalX2c && requested.id.id == 'io.github.linyilei.x2c') {
+                useModule('com.github.linyilei.X2C-AGP:x2c-gradle-plugin:v0.1.1')
             }
         }
     }
@@ -29,6 +30,7 @@ rootProject.name = "X2C-AGP"
 include ':app'
 include ':feature-demo'
 include ':feature-nested'
-if (System.getenv('JITPACK') == 'true') {
+def useLocalX2c = System.getenv('USE_LOCAL_X2C') == 'true' || System.getenv('JITPACK') == 'true'
+if (useLocalX2c) {
     include ':x2c-runtime'
 }

@@ -4,8 +4,8 @@ plugins {
 
 apply plugin: 'com.android.library'
 
-def useRemoteX2c = System.getenv('JITPACK') != 'true'
-def x2cVersion = '0.1.1'
+def useLocalX2c = System.getenv('USE_LOCAL_X2C') == 'true' || System.getenv('JITPACK') == 'true'
+def x2cVersion = 'v0.1.1'
 
 android {
     compileSdkVersion 30
@@ -34,9 +34,9 @@ android {
 }
 
 dependencies {
-    implementation useRemoteX2c
-            ? "com.github.linyilei.X2C-AGP:x2c-runtime:${x2cVersion}"
-            : project(':x2c-runtime')
+    implementation useLocalX2c
+            ? project(':x2c-runtime')
+            : "com.github.linyilei.X2C-AGP:x2c-runtime:${x2cVersion}"
     implementation project(':feature-nested')
     implementation 'androidx.constraintlayout:constraintlayout:2.0.4'
     implementation 'androidx.recyclerview:recyclerview:1.2.1'

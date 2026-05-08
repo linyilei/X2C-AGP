@@ -9,14 +9,16 @@ buildscript {
     }
 }
 
+def useLocalX2c = System.getenv('USE_LOCAL_X2C') == 'true' || System.getenv('JITPACK') == 'true'
+
 allprojects {
     repositories {
-        if (System.getenv('JITPACK') != 'true') {
+        if (!useLocalX2c) {
             mavenLocal()
         }
         google()
         mavenCentral()
-        if (System.getenv('JITPACK') != 'true') {
+        if (!useLocalX2c) {
             maven { url 'https://jitpack.io' }
         }
     }

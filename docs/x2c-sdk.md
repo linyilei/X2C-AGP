@@ -20,8 +20,8 @@ The plugin supports both application and Android library modules. Library module
 
 ## Published Artifacts
 
-- `com.github.linyilei.X2C-AGP:x2c-runtime:0.1.1`
-- `com.github.linyilei.X2C-AGP:x2c-gradle-plugin:0.1.1`
+- `com.github.linyilei.X2C-AGP:x2c-runtime:v0.1.1`
+- `com.github.linyilei.X2C-AGP:x2c-gradle-plugin:v0.1.1`
 
 Both artifacts are configured for local Maven and JitPack. The Gradle plugin id remains `io.github.linyilei.x2c`; local sample builds resolve the implementation artifact from `mavenLocal()` first.
 
@@ -38,7 +38,7 @@ pluginManagement {
         maven { url 'https://jitpack.io' }
     }
     plugins {
-        id 'io.github.linyilei.x2c' version '0.1.1'
+        id 'io.github.linyilei.x2c' version 'v0.1.1'
     }
     resolutionStrategy {
         eachPlugin {
@@ -60,7 +60,7 @@ plugins {
 apply plugin: 'com.android.application'
 
 dependencies {
-    implementation 'com.github.linyilei.X2C-AGP:x2c-runtime:0.1.1'
+    implementation 'com.github.linyilei.X2C-AGP:x2c-runtime:v0.1.1'
 }
 ```
 
@@ -170,7 +170,7 @@ apply plugin: 'com.android.library'
 apply plugin: 'io.github.linyilei.x2c'
 
 dependencies {
-    implementation 'com.github.linyilei.X2C-AGP:x2c-runtime:0.1.1'
+    implementation 'com.github.linyilei.X2C-AGP:x2c-runtime:v0.1.1'
 }
 ```
 
@@ -182,8 +182,9 @@ This allows app layouts to include a normal-root layout from a feature/library m
 
 This repository keeps two resolution modes:
 
-- Default local sample builds resolve both the plugin and runtime from `mavenLocal()` first, then remote JitPack.
-- Only when `JITPACK=true` is present does the repository switch back to local `includeBuild('x2c-gradle-plugin')` and local `:x2c-runtime`, so JitPack can build and publish the current tag from source.
+- Default sample builds resolve the plugin and runtime from published artifacts such as `mavenLocal()` or JitPack.
+- When `USE_LOCAL_X2C=true` is present, the repository switches to local `includeBuild('x2c-gradle-plugin')` and local `:x2c-runtime` source projects for end-to-end source verification.
+- JitPack itself also enters source-project mode through its own `JITPACK=true` environment so the tagged source can be published directly.
 
 ## Current Limits
 
