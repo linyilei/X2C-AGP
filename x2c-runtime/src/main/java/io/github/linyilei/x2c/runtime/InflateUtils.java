@@ -5,10 +5,10 @@ import android.os.Build;
 import android.content.Context;
 import android.util.AttributeSet;
 import android.util.Xml;
+import android.view.ContextThemeWrapper;
 import android.view.InflateException;
 import android.view.View;
 import android.view.ViewGroup;
-import android.widget.FrameLayout;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
@@ -33,6 +33,7 @@ public final class InflateUtils {
     private static final String APP_COMPAT_STYLEABLE_CLASS_NAME = "androidx.appcompat.R$styleable";
     private static final String VECTOR_ENABLED_TINT_RESOURCES_CLASS_NAME =
             "androidx.appcompat.widget.VectorEnabledTintResources";
+    private static final int[] INCLUDE_THEME_ATTRS = new int[]{android.R.attr.theme};
     private static final Class<?>[] VIEW_SIGNATURE = new Class<?>[]{Context.class, AttributeSet.class};
     private static final Class<?>[] CONTEXT_ONLY_SIGNATURE = new Class<?>[]{Context.class};
     private static final Class<?>[] APP_COMPAT_CREATE_VIEW_SIGNATURE = new Class<?>[]{
@@ -75,11 +76,7 @@ public final class InflateUtils {
         if (parent == null) {
             return null;
         }
-        try {
-            return parent.generateLayoutParams(attrs);
-        } catch (RuntimeException ignore) {
-            return null;
-        }
+        return parent.generateLayoutParams(attrs);
     }
 
     public static void addView(@NonNull ViewGroup parent, @NonNull View child, @Nullable AttributeSet attrs) {
@@ -126,9 +123,21 @@ public final class InflateUtils {
         shouldWrapContext();
     }
 
+    public static void clearPrewarmState() {
+        synchronized (InflateUtils.class) {
+            sAppCompatInflaterBridges.clear();
+            sAppCompatInflaterBridgeMisses.clear();
+            sAppCompatStyleableInfo = null;
+            sAppCompatStyleableLookupAttempted = false;
+            sWrapContextEnabled = null;
+            sWrapContextLookupAttempted = false;
+        }
+    }
+
     @NonNull
     public static View include(@NonNull Context context, @NonNull ViewGroup parent, int layoutId, @NonNull AttributeSet includeAttrs) {
-        View view = X2C.inflate(context, layoutId, parent, false);
+        Context themedContext = applyIncludeTheme(context, includeAttrs);
+        View view = X2C.inflate(themedContext, layoutId, parent, false);
         ViewGroup.LayoutParams params = generateLayoutParams(parent, includeAttrs);
         if (params == null) {
             params = view.getLayoutParams();
@@ -160,9 +169,9 @@ public final class InflateUtils {
     public static View includeMerge(@NonNull Context context, @NonNull ViewGroup parent, int layoutId,
                                     @NonNull AttributeSet includeAttrs) {
         // Native LayoutInflater ignores layout parameters on an <include> tag if the
-        // included layout's root is <merge>. We align with this behavior to ensure
-        // consistent view hierarchies between X2C and fallback XML inflation.
-        return X2C.inflate(context, layoutId, parent, true);
+        // included layout's root is <merge>, but it still applies android:theme
+        // from the <include> tag to the inflated subtree.
+        return X2C.inflate(applyIncludeTheme(context, includeAttrs), layoutId, parent, true);
     }
 
     public static void finishInflate(@Nullable View view) {
@@ -247,6 +256,17 @@ public final class InflateUtils {
         }
     }
 
+    @NonNull
+    private static Context applyIncludeTheme(@NonNull Context context, @NonNull AttributeSet includeAttrs) {
+        TypedArray ta = context.obtainStyledAttributes(includeAttrs, INCLUDE_THEME_ATTRS);
+        try {
+            int themeResId = ta.getResourceId(0, 0);
+            return themeResId == 0 ? context : new ContextThemeWrapper(context, themeResId);
+        } finally {
+            ta.recycle();
+        }
+    }
+
     @Nullable
     private static View createViewWithAppCompat(@NonNull Context context, @Nullable ViewGroup parent,
                                                 @NonNull AttributeSet attrs, @NonNull String name) {
@@ -255,7 +275,8 @@ public final class InflateUtils {
             return null;
         }
         try {
-            Object view = bridge.createView.invoke(bridge.inflater, parent, name, context, attrs,
+            Object inflater = bridge.createInflater();
+            Object view = bridge.createView.invoke(inflater, parent, name, context, attrs,
                     shouldInheritContext(parent, attrs),
                     Build.VERSION.SDK_INT < 21,
                     true,
@@ -389,10 +410,11 @@ public final class InflateUtils {
             if (!baseClass.isAssignableFrom(inflaterClass)) {
                 return null;
             }
-            Object inflater = inflaterClass.getDeclaredConstructor().newInstance();
+            Constructor<?> inflaterConstructor = inflaterClass.getDeclaredConstructor();
+            inflaterConstructor.setAccessible(true);
             Method createView = baseClass.getDeclaredMethod("createView", APP_COMPAT_CREATE_VIEW_SIGNATURE);
             createView.setAccessible(true);
-            return new AppCompatInflaterBridge(inflater, createView);
+            return new AppCompatInflaterBridge(inflaterConstructor, createView);
         } catch (Exception ignore) {
             return null;
         }
@@ -481,12 +503,17 @@ public final class InflateUtils {
     }
 
     private static final class AppCompatInflaterBridge {
-        final Object inflater;
+        final Constructor<?> inflaterConstructor;
         final Method createView;
 
-        AppCompatInflaterBridge(@NonNull Object inflater, @NonNull Method createView) {
-            this.inflater = inflater;
+        AppCompatInflaterBridge(@NonNull Constructor<?> inflaterConstructor, @NonNull Method createView) {
+            this.inflaterConstructor = inflaterConstructor;
             this.createView = createView;
+        }
+
+        @NonNull
+        Object createInflater() throws Exception {
+            return inflaterConstructor.newInstance();
         }
     }
 }

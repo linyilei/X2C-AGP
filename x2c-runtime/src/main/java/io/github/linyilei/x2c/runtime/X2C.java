@@ -23,8 +23,9 @@ public final class X2C {
     private static final String GENERATED_ROOT_INDEX_SUFFIX = ".x2c.X2CRootIndex";
     private static final Object FACTORY_MISS = new Object();
 
-    private static volatile RootIndex sRootIndex;
-    private static volatile boolean sRootIndexLookupAttempted;
+    private static volatile RootIndex sInstalledRootIndex;
+    private static final ConcurrentHashMap<String, RootIndex> sRootIndexes = new ConcurrentHashMap<>();
+    private static final ConcurrentHashMap<String, Boolean> sRootIndexMisses = new ConcurrentHashMap<>();
     private static final ConcurrentHashMap<String, SparseArray<IViewFactory>> sLoadedGroups = new ConcurrentHashMap<>();
     private static final ConcurrentHashMap<Integer, Object> sFactoryCache = new ConcurrentHashMap<>();
     private static volatile boolean sDebugLogging;
@@ -34,11 +35,12 @@ public final class X2C {
 
     public static void installRoot(@Nullable X2CRootIndex rootIndex) {
         synchronized (X2C.class) {
-            sRootIndex = rootIndex == null ? null : new RootIndex();
+            sInstalledRootIndex = rootIndex == null ? null : new RootIndex();
             if (rootIndex != null) {
-                rootIndex.loadInto(sRootIndex.layoutToGroup, sRootIndex.groupClassNames);
+                rootIndex.loadInto(sInstalledRootIndex.layoutToGroup, sInstalledRootIndex.groupClassNames);
             }
-            sRootIndexLookupAttempted = rootIndex != null;
+            sRootIndexes.clear();
+            sRootIndexMisses.clear();
             sLoadedGroups.clear();
             sFactoryCache.clear();
         }
@@ -121,11 +123,23 @@ public final class X2C {
     }
 
     public static void clearPreload(int layoutId) {
-        sFactoryCache.remove(layoutId);
+        synchronized (X2C.class) {
+            sFactoryCache.remove(layoutId);
+            String groupClassName = resolveCachedGroupClassName(layoutId);
+            if (groupClassName != null) {
+                sLoadedGroups.remove(groupClassName);
+            }
+        }
     }
 
     public static void clearPreloads() {
-        sFactoryCache.clear();
+        synchronized (X2C.class) {
+            sFactoryCache.clear();
+            sLoadedGroups.clear();
+            sRootIndexes.clear();
+            sRootIndexMisses.clear();
+        }
+        InflateUtils.clearPrewarmState();
     }
 
     @Nullable
@@ -205,15 +219,38 @@ public final class X2C {
 
     @Nullable
     private static RootIndex resolveRootIndex(@NonNull Context context) {
-        if (sRootIndex != null || sRootIndexLookupAttempted) {
-            return sRootIndex;
+        RootIndex installedRootIndex = sInstalledRootIndex;
+        if (installedRootIndex != null) {
+            return installedRootIndex;
+        }
+        Context lookupContext = context.getApplicationContext() != null ? context.getApplicationContext() : context;
+        String packageName = lookupContext.getPackageName();
+        RootIndex cachedRootIndex = sRootIndexes.get(packageName);
+        if (cachedRootIndex != null) {
+            return cachedRootIndex;
+        }
+        if (sRootIndexMisses.containsKey(packageName)) {
+            return null;
         }
         synchronized (X2C.class) {
-            if (!sRootIndexLookupAttempted) {
-                sRootIndex = tryLoadGeneratedRootIndex(context);
-                sRootIndexLookupAttempted = true;
+            installedRootIndex = sInstalledRootIndex;
+            if (installedRootIndex != null) {
+                return installedRootIndex;
             }
-            return sRootIndex;
+            cachedRootIndex = sRootIndexes.get(packageName);
+            if (cachedRootIndex != null) {
+                return cachedRootIndex;
+            }
+            if (sRootIndexMisses.containsKey(packageName)) {
+                return null;
+            }
+            RootIndex loadedRootIndex = tryLoadGeneratedRootIndex(lookupContext);
+            if (loadedRootIndex != null) {
+                sRootIndexes.put(packageName, loadedRootIndex);
+            } else {
+                sRootIndexMisses.put(packageName, Boolean.TRUE);
+            }
+            return loadedRootIndex;
         }
     }
 
@@ -255,6 +292,30 @@ public final class X2C {
             return null;
         }
         return null;
+    }
+
+    @Nullable
+    private static String resolveCachedGroupClassName(int layoutId) {
+        String groupClassName = resolveGroupClassName(sInstalledRootIndex, layoutId);
+        if (groupClassName != null) {
+            return groupClassName;
+        }
+        for (RootIndex rootIndex : sRootIndexes.values()) {
+            groupClassName = resolveGroupClassName(rootIndex, layoutId);
+            if (groupClassName != null) {
+                return groupClassName;
+            }
+        }
+        return null;
+    }
+
+    @Nullable
+    private static String resolveGroupClassName(@Nullable RootIndex rootIndex, int layoutId) {
+        if (rootIndex == null) {
+            return null;
+        }
+        int groupId = rootIndex.layoutToGroup.get(layoutId, -1);
+        return groupId == -1 ? null : rootIndex.groupClassNames.get(groupId);
     }
 
     private static final class RootIndex {

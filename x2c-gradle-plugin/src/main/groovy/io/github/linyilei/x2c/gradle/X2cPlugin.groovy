@@ -9,6 +9,7 @@ import com.squareup.javapoet.TypeName
 import com.squareup.javapoet.TypeSpec
 import com.squareup.javapoet.WildcardTypeName
 import org.gradle.api.DefaultTask
+import org.gradle.api.GradleException
 import org.gradle.api.Plugin
 import org.gradle.api.Project
 import org.gradle.api.attributes.Attribute
@@ -25,6 +26,10 @@ import org.w3c.dom.Node
 
 import javax.xml.parsers.DocumentBuilderFactory
 import javax.lang.model.element.Modifier
+import java.io.BufferedReader
+import java.io.InputStream
+import java.io.InputStreamReader
+import java.nio.charset.StandardCharsets
 import java.util.zip.ZipFile
 import java.util.zip.ZipInputStream
 
@@ -32,15 +37,16 @@ class X2cPlugin implements Plugin<Project> {
 
     @Override
     void apply(Project project) {
+        X2cExtension extension = project.extensions.create('x2c', X2cExtension)
         project.plugins.withId('com.android.application') {
-            configureAndroidProject(project, true)
+            configureAndroidProject(project, true, extension)
         }
         project.plugins.withId('com.android.library') {
-            configureAndroidProject(project, false)
+            configureAndroidProject(project, false, extension)
         }
     }
 
-    private static void configureAndroidProject(Project project, boolean applicationModule) {
+    private static void configureAndroidProject(Project project, boolean applicationModule, X2cExtension extension) {
         def android = project.extensions.getByName('android')
         String rPackage = resolveManifestPackage(project, android)
         String libraryGeneratedPackage = applicationModule ? null : rPackage + '.x2c'
@@ -49,34 +55,79 @@ class X2cPlugin implements Plugin<Project> {
         variants.all { variant ->
             String taskName = "generate${variant.name.capitalize()}X2C"
             File outputDir = project.file("${project.buildDir}/generated/source/x2c/${variant.name}")
+            File javaResOutputDir = project.file("${project.buildDir}/generated/java-res/x2c/${variant.name}")
             def task = project.tasks.create(taskName, GenerateX2cTask) {
                 it.outputDir = outputDir
+                it.javaResOutputDir = javaResOutputDir
                 it.applicationModule = applicationModule
+                it.extensionConfig = extension
                 it.generatedPackage = applicationModule ? variant.applicationId + '.x2c' : libraryGeneratedPackage
                 it.rPackage = rPackage
                 it.resDirs = variant.sourceSets.collectMany { sourceSet ->
                     sourceSet.resDirectories.findAll { File dir -> dir.exists() }
                 }
+                it.sourceDirs = variant.sourceSets.collectMany { sourceSet ->
+                    resolveSourceDirectories(project, sourceSet).findAll { File dir -> dir.exists() }
+                }
                 if (applicationModule) {
                     def runtimeClasspath = project.configurations.findByName("${variant.name}RuntimeClasspath")
-                    it.moduleIndexClasspath = runtimeClasspath == null
+                    it.moduleIndexMarkerClasspath = runtimeClasspath == null
                             ? project.files()
-                            : moduleIndexClasspath(project, runtimeClasspath)
+                            : moduleIndexMarkerClasspath(project, runtimeClasspath)
+                    it.moduleIndexFallbackClasspath = runtimeClasspath == null
+                            ? project.files()
+                            : moduleIndexFallbackClasspath(project, runtimeClasspath)
                 }
             }
             variant.registerJavaGeneratingTask(task, outputDir)
+            if (!applicationModule) {
+                variant.processJavaResourcesProvider.configure { processTask ->
+                    processTask.dependsOn(task)
+                    processTask.from(task.javaResOutputDir)
+                }
+            }
         }
     }
 
-    private static FileCollection moduleIndexClasspath(Project project, def runtimeClasspath) {
+    private static List<File> resolveSourceDirectories(Project project, def sourceSet) {
+        Set<File> sourceDirs = new LinkedHashSet<>()
+        def javaDirectories = sourceSet.hasProperty('javaDirectories') ? sourceSet.javaDirectories : null
+        if (javaDirectories != null) {
+            sourceDirs.addAll(javaDirectories.findAll { File dir -> dir != null })
+        } else if (sourceSet.hasProperty('java') && sourceSet.java?.hasProperty('srcDirs')) {
+            sourceDirs.addAll(sourceSet.java.srcDirs.findAll { File dir -> dir != null })
+        }
+        if (sourceSet.hasProperty('kotlin') && sourceSet.kotlin?.hasProperty('srcDirs')) {
+            sourceDirs.addAll(sourceSet.kotlin.srcDirs.findAll { File dir -> dir != null })
+        }
+        String sourceSetName = sourceSet.hasProperty('name') ? sourceSet.name : 'main'
+        File conventionalKotlinDir = project.file("src/${sourceSetName}/kotlin")
+        if (conventionalKotlinDir.exists()) {
+            sourceDirs.add(conventionalKotlinDir)
+        }
+        new ArrayList<>(sourceDirs)
+    }
+
+    private static FileCollection moduleIndexMarkerClasspath(Project project, def runtimeClasspath) {
+        Attribute<String> artifactType = Attribute.of('artifactType', String)
+        FileCollection javaRes = runtimeClasspath.incoming.artifactView { view ->
+            view.attributes.attribute(artifactType, 'android-java-res')
+        }.files
+        project.files(javaRes)
+    }
+
+    private static FileCollection moduleIndexFallbackClasspath(Project project, def runtimeClasspath) {
         Attribute<String> artifactType = Attribute.of('artifactType', String)
         FileCollection androidClassesJars = runtimeClasspath.incoming.artifactView { view ->
             view.attributes.attribute(artifactType, 'android-classes-jar')
         }.files
+        FileCollection androidClassesDirs = runtimeClasspath.incoming.artifactView { view ->
+            view.attributes.attribute(artifactType, 'android-classes-directory')
+        }.files
         FileCollection jars = runtimeClasspath.incoming.artifactView { view ->
             view.attributes.attribute(artifactType, 'jar')
         }.files
-        project.files(androidClassesJars, jars)
+        project.files(androidClassesJars, androidClassesDirs, jars)
     }
 
     private static String resolveManifestPackage(Project project, def android) {
@@ -117,16 +168,96 @@ class X2cPlugin implements Plugin<Project> {
     }
 }
 
+class X2cExtension {
+
+    private final Set<String> excludedLayouts = new LinkedHashSet<>()
+
+    Set<String> normalizedExcludedLayouts() {
+        return new LinkedHashSet<>(excludedLayouts)
+    }
+
+    void setExcludes(Iterable<?> values) {
+        replaceExcludedLayouts(values)
+    }
+
+    List<String> getExcludes() {
+        return new ArrayList<>(excludedLayouts)
+    }
+
+    void setBlacklist(Iterable<?> values) {
+        replaceExcludedLayouts(values)
+    }
+
+    List<String> getBlacklist() {
+        return getExcludes()
+    }
+
+    void excludeLayouts(String... names) {
+        addExcludedLayouts(names == null ? [] : Arrays.asList(names))
+    }
+
+    void blacklist(String... names) {
+        excludeLayouts(names)
+    }
+
+    private void replaceExcludedLayouts(Iterable<?> values) {
+        excludedLayouts.clear()
+        addExcludedLayouts(values)
+    }
+
+    private void addExcludedLayouts(Iterable<?> values) {
+        if (values == null) {
+            return
+        }
+        values.each { Object value ->
+            String normalized = normalizeLayoutName(value)
+            if (normalized != null) {
+                excludedLayouts.add(normalized)
+            }
+        }
+    }
+
+    private static String normalizeLayoutName(Object rawValue) {
+        if (rawValue == null) {
+            return null
+        }
+        String value = rawValue.toString().trim()
+        if (value.isEmpty()) {
+            return null
+        }
+        if (value.startsWith('@layout/')) {
+            value = value.substring('@layout/'.length())
+        } else if (value.startsWith('@+layout/')) {
+            value = value.substring('@+layout/'.length())
+        }
+        if (value.endsWith('.xml')) {
+            value = value.substring(0, value.length() - '.xml'.length())
+        }
+        return value.isEmpty() ? null : value
+    }
+}
+
 class GenerateX2cTask extends DefaultTask {
+
+    static final String MODULE_INDEX_MARKER_DIR = 'META-INF/x2c'
+    static final String MODULE_INDEX_MARKER_SUFFIX = '.module-index'
 
     @OutputDirectory
     File outputDir
+
+    @OutputDirectory
+    File javaResOutputDir
+
+    @org.gradle.api.tasks.Internal
+    X2cExtension extensionConfig
 
     String rPackage
     String generatedPackage
     boolean applicationModule
     List<File> resDirs = []
-    FileCollection moduleIndexClasspath
+    List<File> sourceDirs = []
+    FileCollection moduleIndexMarkerClasspath
+    FileCollection moduleIndexFallbackClasspath
 
     @Input
     String getX2cGeneratedPackage() {
@@ -143,6 +274,14 @@ class GenerateX2cTask extends DefaultTask {
         return applicationModule
     }
 
+    @Input
+    List<String> getX2cExcludedLayouts() {
+        Set<String> excluded = extensionConfig == null
+                ? new LinkedHashSet<String>()
+                : extensionConfig.normalizedExcludedLayouts()
+        return new ArrayList<>(excluded).sort()
+    }
+
     @InputFiles
     @PathSensitive(PathSensitivity.RELATIVE)
     FileCollection getX2cResourceDirs() {
@@ -150,9 +289,21 @@ class GenerateX2cTask extends DefaultTask {
     }
 
     @InputFiles
+    @PathSensitive(PathSensitivity.RELATIVE)
+    FileCollection getX2cSourceDirs() {
+        return project.files(sourceDirs)
+    }
+
+    @InputFiles
     @Classpath
-    FileCollection getX2cModuleIndexClasspath() {
-        return moduleIndexClasspath ?: project.files()
+    FileCollection getX2cModuleIndexMarkerClasspath() {
+        return moduleIndexMarkerClasspath ?: project.files()
+    }
+
+    @InputFiles
+    @Classpath
+    FileCollection getX2cModuleIndexFallbackClasspath() {
+        return moduleIndexFallbackClasspath ?: project.files()
     }
 
     @TaskAction
@@ -167,16 +318,20 @@ class GenerateX2cTask extends DefaultTask {
         }
         deleteDir(outputDir)
         outputDir.mkdirs()
+        deleteDir(javaResOutputDir)
+        javaResOutputDir.mkdirs()
 
-        Map<String, Map<String, LayoutSpec>> layouts = scanLayouts()
-        Set<String> targets = resolveGenerationTargets(layouts)
+        LayoutCatalog layoutCatalog = new LayoutCatalog(indexLayoutFiles(resDirs), project)
+        LayoutSelection selection = resolveLayoutSelection(layoutCatalog, new LinkedHashSet<>(getX2cExcludedLayouts()))
+        Map<String, Map<String, LayoutSpec>> layouts = selection.layouts
+        Set<String> targets = selection.targets
         List<String> moduleIndexClassNames = findModuleIndexClassNames()
         if (targets.isEmpty() && moduleIndexClassNames.isEmpty()) {
-            project.logger.lifecycle('X2C found no layouts marked with tools:x2c="standard".')
+            project.logger.lifecycle('X2C found no annotated layouts selected.')
             return
         }
 
-        JavaWriter writer = new JavaWriter(outputDir, generatedPackage, rPackage, layouts, targets,
+        JavaWriter writer = new JavaWriter(outputDir, javaResOutputDir, generatedPackage, rPackage, layouts, targets,
                 moduleIndexClassNames, applicationModule, project)
         writer.writeAll()
     }
@@ -186,10 +341,57 @@ class GenerateX2cTask extends DefaultTask {
             return []
         }
         Set<String> classNames = new LinkedHashSet<>()
-        getX2cModuleIndexClasspath().files.each { File file ->
-            scanModuleIndexClasses(file, classNames)
+        getX2cModuleIndexMarkerClasspath().files.each { File file ->
+            scanModuleIndexMarkers(file, classNames)
+        }
+        if (classNames.isEmpty()) {
+            getX2cModuleIndexFallbackClasspath().files.each { File file ->
+                scanModuleIndexClasses(file, classNames)
+            }
         }
         classNames.sort()
+    }
+
+    private static void scanModuleIndexMarkers(File file, Set<String> classNames) {
+        if (file == null || !file.exists()) {
+            return
+        }
+        if (file.isDirectory()) {
+            File markerDir = new File(file, MODULE_INDEX_MARKER_DIR)
+            File[] markerFiles = markerDir.listFiles()
+            if (markerFiles != null) {
+                markerFiles.findAll { File markerFile -> markerFile.isFile() }
+                        .each { File markerFile ->
+                    markerFile.withReader('UTF-8') { BufferedReader reader ->
+                        addModuleIndexClasses(reader, classNames)
+                    }
+                }
+            }
+            return
+        }
+        if (file.name.endsWith('.jar') || file.name.endsWith('.zip')) {
+            try {
+                ZipFile zipFile = new ZipFile(file)
+                try {
+                    zipFile.entries().each { entry ->
+                        if (entry.directory || !entry.name.startsWith(MODULE_INDEX_MARKER_DIR + '/')
+                                || !entry.name.endsWith(MODULE_INDEX_MARKER_SUFFIX)) {
+                            return
+                        }
+                        InputStream inputStream = zipFile.getInputStream(entry)
+                        try {
+                            addModuleIndexClasses(new BufferedReader(new InputStreamReader(inputStream, StandardCharsets.UTF_8)), classNames)
+                        } finally {
+                            inputStream.close()
+                        }
+                    }
+                } finally {
+                    zipFile.close()
+                }
+            } catch (Exception ignored) {
+                // Not a readable zip or no marker present.
+            }
+        }
     }
 
     private static void scanModuleIndexClasses(File file, Set<String> classNames) {
@@ -269,12 +471,106 @@ class GenerateX2cTask extends DefaultTask {
         }
     }
 
-    private Map<String, Map<String, LayoutSpec>> scanLayouts() {
-        return scanLayouts(resDirs, project)
+    private static void addModuleIndexClasses(BufferedReader reader, Set<String> classNames) {
+        String line = reader.readLine()
+        while (line != null) {
+            String className = line.trim()
+            if (!className.isEmpty() && !className.startsWith('#')) {
+                classNames.add(className)
+            }
+            line = reader.readLine()
+        }
     }
 
-    private static Map<String, Map<String, LayoutSpec>> scanLayouts(List<File> sourceResDirs, Project owner) {
-        Map<String, Map<String, LayoutSpec>> result = [:].withDefault { [:] }
+    private LayoutSelection resolveLayoutSelection(LayoutCatalog layoutCatalog, Set<String> excludedLayouts) {
+        Set<String> targets = new LinkedHashSet<>()
+        Set<String> missingLayouts = new LinkedHashSet<>()
+        scanAnnotatedLayoutTargets().each { String name ->
+            if (excludedLayouts.contains(name)) {
+                project.logger.lifecycle("X2C skipped annotated layout ${name} because it is blacklisted.")
+                return
+            }
+            if (!layoutCatalog.contains(name)) {
+                missingLayouts.add(name)
+                return
+            }
+            targets.add(name)
+        }
+        if (!missingLayouts.isEmpty()) {
+            throw new GradleException("X2C could not find annotated layouts: "
+                    + missingLayouts.sort().join(', ')
+                    + ". Check @Xml(layouts = ...) entries under ${project.path}.")
+        }
+        expandIncludedTargets(layoutCatalog, targets, excludedLayouts)
+        return new LayoutSelection(layoutCatalog.snapshot(), targets)
+    }
+
+    private static void expandIncludedTargets(LayoutCatalog layoutCatalog, Set<String> targets, Set<String> excludedLayouts) {
+        List<String> queue = new ArrayList<>(targets)
+        for (int i = 0; i < queue.size(); i++) {
+            String name = queue[i]
+            layoutCatalog.load(name).values().each { LayoutSpec spec ->
+                spec.includes.each { String includeName ->
+                    if (!layoutCatalog.contains(includeName) || excludedLayouts.contains(includeName)) {
+                        return
+                    }
+                    layoutCatalog.load(includeName)
+                    if (targets.add(includeName)) {
+                        queue.add(includeName)
+                    }
+                }
+            }
+        }
+    }
+
+    private Set<String> scanAnnotatedLayoutTargets() {
+        return scanAnnotatedLayoutTargets(sourceDirs)
+    }
+
+    private static Set<String> scanAnnotatedLayoutTargets(List<File> sourceDirs) {
+        Set<String> targets = new LinkedHashSet<>()
+        sourceDirs.each { File dir ->
+            if (dir == null || !dir.exists()) {
+                return
+            }
+            dir.eachFileRecurse { File file ->
+                if (!file.isFile()) {
+                    return
+                }
+                String name = file.name
+                if (!name.endsWith('.java') && !name.endsWith('.kt')) {
+                    return
+                }
+                targets.addAll(extractAnnotatedLayouts(file))
+            }
+        }
+        targets
+    }
+
+    private static Set<String> extractAnnotatedLayouts(File file) {
+        String source
+        try {
+            source = file.getText('UTF-8')
+        } catch (Exception ignored) {
+            return [] as Set<String>
+        }
+        source = source
+                .replaceAll(/(?s)\/\*.*?\*\//, '')
+                .replaceAll(/(?m)^\s*\/\/.*$/, '')
+        Set<String> layouts = new LinkedHashSet<>()
+        def matcher = (source =~ /@Xml\s*\(\s*layouts\s*=\s*(\{[\s\S]*?\}|["'][A-Za-z0-9_]+["'])\s*\)/)
+        while (matcher.find()) {
+            String layoutsArgument = matcher.group(1)
+            def nameMatcher = (layoutsArgument =~ /["']([A-Za-z0-9_]+)["']/)
+            while (nameMatcher.find()) {
+                layouts.add(nameMatcher.group(1))
+            }
+        }
+        layouts
+    }
+
+    private static Map<String, Map<String, File>> indexLayoutFiles(List<File> sourceResDirs) {
+        Map<String, Map<String, File>> result = [:].withDefault { [:] }
         sourceResDirs.each { File resDir ->
             File[] dirs = resDir.listFiles()
             if (dirs == null) {
@@ -290,36 +586,28 @@ class GenerateX2cTask extends DefaultTask {
                         files.findAll { File file -> file.isFile() && file.name.endsWith('.xml') }
                                 .each { File file ->
                                     String name = file.name.substring(0, file.name.length() - '.xml'.length())
-                                    LayoutSpec spec = LayoutParser.parse(file, name, qualifier, owner)
-                                    if (spec != null) {
-                                        result[name][qualifier] = spec
-                                    }
+                                    result[name][qualifier] = file
                                 }
                     }
         }
         result
     }
 
-    private static Set<String> resolveGenerationTargets(Map<String, Map<String, LayoutSpec>> layouts) {
-        Set<String> targets = new LinkedHashSet<>()
-        layouts.each { String name, Map<String, LayoutSpec> variants ->
-            if (variants.values().any { LayoutSpec spec -> spec.marked }) {
-                targets.add(name)
+    private static Map<String, Map<String, LayoutSpec>> parseLayouts(Map<String, Map<String, File>> layoutFiles,
+                                                                     String layoutName,
+                                                                     Project owner) {
+        Map<String, Map<String, LayoutSpec>> result = [:].withDefault { [:] }
+        Map<String, File> variants = layoutFiles[layoutName]
+        if (variants == null || variants.isEmpty()) {
+            return result
+        }
+        variants.each { String qualifier, File file ->
+            LayoutSpec spec = LayoutParser.parse(file, layoutName, qualifier, owner)
+            if (spec != null) {
+                result[layoutName][qualifier] = spec
             }
         }
-
-        List<String> queue = new ArrayList<>(targets)
-        for (int i = 0; i < queue.size(); i++) {
-            String name = queue[i]
-            layouts[name]?.values()?.each { LayoutSpec spec ->
-                spec.includes.each { String includeName ->
-                    if (layouts.containsKey(includeName) && targets.add(includeName)) {
-                        queue.add(includeName)
-                    }
-                }
-            }
-        }
-        targets
+        result
     }
 
     private static void deleteDir(File dir) {
@@ -343,7 +631,6 @@ class LayoutParser {
             Element root = factory.newDocumentBuilder().parse(file).documentElement
             LayoutNode rootNode = parseElement(root)
             LayoutSpec spec = new LayoutSpec(layoutName, qualifier, file, rootNode)
-            spec.marked = isMarked(root)
             collectIncludes(rootNode, spec.includes)
             spec.unsupported = containsUnsupported(rootNode)
             return spec
@@ -368,11 +655,6 @@ class LayoutParser {
             child = child.nextSibling
         }
         node
-    }
-
-    private static boolean isMarked(Element root) {
-        String value = root.getAttribute('tools:x2c')
-        return 'standard' == value || 'true' == value
     }
 
     private static void collectIncludes(LayoutNode node, Set<String> includes) {
@@ -404,6 +686,51 @@ class LayoutParser {
     }
 }
 
+class LayoutCatalog {
+    private final Map<String, Map<String, File>> layoutFiles
+    private final Map<String, Map<String, LayoutSpec>> parsedLayouts = new LinkedHashMap<>()
+    private final Project project
+
+    LayoutCatalog(Map<String, Map<String, File>> layoutFiles, Project project) {
+        this.layoutFiles = layoutFiles ?: [:]
+        this.project = project
+    }
+
+    boolean contains(String layoutName) {
+        return layoutFiles.containsKey(layoutName)
+    }
+
+    Map<String, LayoutSpec> load(String layoutName) {
+        if (parsedLayouts.containsKey(layoutName)) {
+            return parsedLayouts[layoutName]
+        }
+        Map<String, LayoutSpec> parsed = GenerateX2cTask.parseLayouts(layoutFiles, layoutName, project)[layoutName]
+        if (parsed == null) {
+            parsed = [:]
+        }
+        parsedLayouts[layoutName] = parsed
+        return parsed
+    }
+
+    Map<String, Map<String, LayoutSpec>> snapshot() {
+        Map<String, Map<String, LayoutSpec>> copy = [:].withDefault { [:] }
+        parsedLayouts.each { String layoutName, Map<String, LayoutSpec> variants ->
+            copy[layoutName] = variants
+        }
+        return copy
+    }
+}
+
+class LayoutSelection {
+    final Map<String, Map<String, LayoutSpec>> layouts
+    final Set<String> targets
+
+    LayoutSelection(Map<String, Map<String, LayoutSpec>> layouts, Set<String> targets) {
+        this.layouts = layouts
+        this.targets = targets
+    }
+}
+
 class JavaWriter {
 
     private static final ClassName CONTEXT = ClassName.get('android.content', 'Context')
@@ -426,6 +753,7 @@ class JavaWriter {
     private static final ClassName EXCEPTION = ClassName.get('java.lang', 'Exception')
 
     private final File outputDir
+    private final File javaResOutputDir
     private final String generatedPackage
     private final String rPackage
     private final Map<String, Map<String, LayoutSpec>> layouts
@@ -434,10 +762,11 @@ class JavaWriter {
     private final boolean applicationModule
     private final Project project
 
-    JavaWriter(File outputDir, String generatedPackage, String rPackage,
+    JavaWriter(File outputDir, File javaResOutputDir, String generatedPackage, String rPackage,
                Map<String, Map<String, LayoutSpec>> layouts, Set<String> targets,
                List<String> moduleIndexClassNames, boolean applicationModule, Project project) {
         this.outputDir = outputDir
+        this.javaResOutputDir = javaResOutputDir
         this.generatedPackage = generatedPackage
         this.rPackage = rPackage
         this.layouts = layouts
@@ -449,12 +778,12 @@ class JavaWriter {
 
     void writeAll() {
         targets.each { String layoutName ->
-            writeDispatcher(layoutName)
-            layouts[layoutName].values().each { LayoutSpec spec ->
-                if (!spec.unsupported) {
+            if (!canGenerateLayout(layoutName)) {
+                project.logger.lifecycle("X2C skipped optimized layout ${layoutName} because ${skipReason(layoutName)}.")
+            } else {
+                writeDispatcher(layoutName)
+                layouts[layoutName].values().each { LayoutSpec spec ->
                     writeVariantFactory(spec)
-                } else {
-                    project.logger.lifecycle("X2C skipped optimized variant ${spec.file} because it contains unsupported tags.")
                 }
             }
         }
@@ -463,6 +792,7 @@ class JavaWriter {
             writeRootIndex()
         } else {
             writeModuleIndex()
+            writeModuleIndexMarker()
         }
     }
 
@@ -474,7 +804,7 @@ class JavaWriter {
                 .returns(TypeName.VOID)
                 .addParameter(factoryArray, 'factories')
         targets.each { String layoutName ->
-            if (hasSupportedVariant(layoutName)) {
+            if (canGenerateLayout(layoutName)) {
                 loadInto.addStatement('factories.put($T.layout.$L, new $T())',
                         rClass(), layoutName, ClassName.get(generatedPackage, dispatcherName(layoutName)))
             }
@@ -492,7 +822,7 @@ class JavaWriter {
         MethodSpec.Builder loadInto = rootLoadIntoBuilder()
         loadInto.addStatement('int groupId = ensureGroup(groupClassNames, $S)', groupClassName)
         targets.each { String layoutName ->
-            if (hasSupportedVariant(layoutName)) {
+            if (canGenerateLayout(layoutName)) {
                 loadInto.addStatement('layoutToGroup.put($T.layout.$L, groupId)', rClass(), layoutName)
             }
         }
@@ -506,13 +836,23 @@ class JavaWriter {
         writeJavaFile(typeSpec)
     }
 
+    private void writeModuleIndexMarker() {
+        if (!targets.any { String layoutName -> canGenerateLayout(layoutName) }) {
+            return
+        }
+        File markerFile = new File(javaResOutputDir,
+                "${GenerateX2cTask.MODULE_INDEX_MARKER_DIR}/${generatedPackage}${GenerateX2cTask.MODULE_INDEX_MARKER_SUFFIX}")
+        markerFile.parentFile.mkdirs()
+        markerFile.setText("${generatedPackage}.X2CModuleIndex\n", 'UTF-8')
+    }
+
     private void writeRootIndex() {
         MethodSpec.Builder loadInto = rootLoadIntoBuilder()
-        if (targets.any { String layoutName -> hasSupportedVariant(layoutName) }) {
+        if (targets.any { String layoutName -> canGenerateLayout(layoutName) }) {
             String groupClassName = "${generatedPackage}.X2CGroup"
             loadInto.addStatement('groupClassNames.put(0, $S)', groupClassName)
             targets.each { String layoutName ->
-                if (hasSupportedVariant(layoutName)) {
+                if (canGenerateLayout(layoutName)) {
                     loadInto.addStatement('layoutToGroup.put($T.layout.$L, 0)', rClass(), layoutName)
                 }
             }
@@ -532,7 +872,9 @@ class JavaWriter {
     }
 
     private void writeDispatcher(String layoutName) {
-        List<LayoutSpec> supported = layouts[layoutName].values().findAll { LayoutSpec spec -> !spec.unsupported }
+        List<LayoutSpec> supported = layouts[layoutName].values().findAll { LayoutSpec spec ->
+            canGenerateVariant(spec)
+        }
         if (supported.isEmpty()) {
             return
         }
@@ -614,8 +956,9 @@ class JavaWriter {
             if (node.includeName == null || node.includeName.isEmpty()) {
                 throw new IllegalStateException("X2C include tag is missing layout attribute.")
             }
-            boolean mergeRoot = isMergeRoot(node.includeName)
-            if (mergeRoot) {
+            if (hasMixedRootKinds(node.includeName)) {
+                body.addStatement('$T.includeDynamic(context, $N, $T.layout.$L, $N)', INFLATE_UTILS, parentVar, rClass(), node.includeName, attrs)
+            } else if (isMergeRoot(node.includeName)) {
                 body.addStatement('$T.includeMerge(context, $N, $T.layout.$L, $N)', INFLATE_UTILS, parentVar, rClass(), node.includeName, attrs)
             } else {
                 body.addStatement('$T.include(context, $N, $T.layout.$L, $N)', INFLATE_UTILS, parentVar, rClass(), node.includeName, attrs)
@@ -623,9 +966,14 @@ class JavaWriter {
             return null
         }
 
-        ClassName type = ClassName.bestGuess(resolveViewType(node))
         String view = "view${index}"
-        body.addStatement('$T $N = new $T(context, $N)', type, view, type, attrs)
+        if (shouldUseRuntimeViewCreation(node)) {
+            body.addStatement('$T $N = $T.createView(context, $N, $N, $S)', VIEW, view, INFLATE_UTILS,
+                    parentVar, attrs, node.tag)
+        } else {
+            ClassName type = ClassName.bestGuess(resolveViewType(node))
+            body.addStatement('$T $N = new $T(context, $N)', type, view, type, attrs)
+        }
         if (root) {
             body.addStatement('$T.attachRoot(parent, $N, $N, attachToParent)', INFLATE_UTILS, view, attrs)
         } else {
@@ -744,8 +1092,48 @@ class JavaWriter {
         return variants.values().every { LayoutSpec spec -> spec.root.tag == 'merge' }
     }
 
-    private boolean hasSupportedVariant(String layoutName) {
-        layouts[layoutName]?.values()?.any { LayoutSpec spec -> !spec.unsupported }
+    private static boolean shouldUseRuntimeViewCreation(LayoutNode node) {
+        return node.tag != 'view' && !node.tag.contains('.')
+    }
+
+    private boolean hasMixedRootKinds(String layoutName) {
+        Map<String, LayoutSpec> variants = layouts[layoutName]
+        if (variants == null || variants.isEmpty()) {
+            return false
+        }
+        boolean hasMerge = variants.values().any { LayoutSpec spec -> spec.root.tag == 'merge' }
+        boolean hasNonMerge = variants.values().any { LayoutSpec spec -> spec.root.tag != 'merge' }
+        return hasMerge && hasNonMerge
+    }
+
+    private boolean canGenerateLayout(String layoutName) {
+        Map<String, LayoutSpec> variants = layouts[layoutName]
+        if (variants == null || variants.isEmpty()) {
+            return false
+        }
+        return variants.values().every { LayoutSpec spec -> canGenerateVariant(spec) }
+    }
+
+    private static boolean canGenerateVariant(LayoutSpec spec) {
+        return spec != null && !spec.unsupported && isSupportedQualifier(spec.qualifier)
+    }
+
+    private String skipReason(String layoutName) {
+        Map<String, LayoutSpec> variants = layouts[layoutName]
+        if (variants == null || variants.isEmpty()) {
+            return 'it has no parsed variants'
+        }
+        List<String> reasons = []
+        if (variants.values().any { LayoutSpec spec -> spec.unsupported }) {
+            reasons.add('one or more variants contain unsupported tags')
+        }
+        List<String> unsupportedQualifiers = variants.values()
+                .findAll { LayoutSpec spec -> !isSupportedQualifier(spec.qualifier) }
+                .collect { LayoutSpec spec -> spec.qualifier ?: '(default)' }
+        if (!unsupportedQualifiers.isEmpty()) {
+            reasons.add("it uses unsupported qualifiers ${unsupportedQualifiers}")
+        }
+        return reasons.isEmpty() ? 'it is not safe to optimize' : reasons.join(' and ')
     }
 
     private static String resolveViewType(LayoutNode node) {
@@ -792,6 +1180,9 @@ class JavaWriter {
         if (qualifier == null || qualifier.isEmpty()) {
             return null
         }
+        if (!isSupportedQualifier(qualifier)) {
+            return null
+        }
         List<String> conditions = []
         qualifier.split('-').each { String token ->
             if (token == 'land') {
@@ -801,6 +1192,15 @@ class JavaWriter {
             }
         }
         conditions.isEmpty() ? null : conditions.join(' && ')
+    }
+
+    private static boolean isSupportedQualifier(String qualifier) {
+        if (qualifier == null || qualifier.isEmpty()) {
+            return true
+        }
+        return qualifier.split('-').every { String token ->
+            token == 'land' || (token.startsWith('v') && token.substring(1).isInteger())
+        }
     }
 
     private ClassName rClass() {
@@ -839,7 +1239,6 @@ class LayoutSpec {
     final String qualifier
     final File file
     final LayoutNode root
-    boolean marked
     boolean unsupported
     final Set<String> includes = new LinkedHashSet<>()
 

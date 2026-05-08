@@ -11,10 +11,12 @@ import androidx.recyclerview.widget.RecyclerView;
 import com.alibaba.android.arouter.facade.annotation.Route;
 
 import io.github.linyilei.x2c.runtime.X2C;
+import io.github.linyilei.x2c.runtime.Xml;
 
 import java.util.Arrays;
 import java.util.List;
 
+@Xml(layouts = "activity_feature_demo")
 @Route(path = FeatureRoutes.FEATURE_DEMO)
 public class FeatureDemoActivity extends Activity {
 
@@ -30,7 +32,7 @@ public class FeatureDemoActivity extends Activity {
                 "card item 4：ConstraintLayout.LayoutParams 来自 XML"
         ));
         bindList(R.id.feature_activity_list, Arrays.asList(
-                "activity item 1：activity_feature_demo 由 ARouter 拦截器提前预加载",
+                "activity item 1：activity_feature_demo 在跳转前由 ARouter 拦截器预热生成路径",
                 "activity item 2：页面内 include 复用 feature_card",
                 "activity item 3：点击下方按钮 finish 返回主模块"
         ));

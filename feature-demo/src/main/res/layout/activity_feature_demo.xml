@@ -1,12 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
-    xmlns:tools="http://schemas.android.com/tools"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:background="#EEF7FB"
-    android:padding="24dp"
-    tools:x2c="standard">
+    android:padding="24dp">
 
     <TextView
         android:id="@+id/feature_page_title"
@@ -25,7 +23,7 @@
         android:layout_width="0dp"
         android:layout_height="wrap_content"
         android:layout_marginTop="8dp"
-        android:text="这个页面由 ARouter 打开，跳转前通过拦截器预加载 X2C 布局。"
+        android:text="这个页面由 ARouter 打开，跳转前通过拦截器预热 X2C 生成路径。"
         android:textColor="#4A6A7D"
         android:textSize="14sp"
         app:layout_constraintEnd_toEndOf="@id/feature_page_title"
