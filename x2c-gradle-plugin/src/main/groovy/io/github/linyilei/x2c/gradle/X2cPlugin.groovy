@@ -458,8 +458,11 @@ class GenerateX2cTask extends DefaultTask {
     private LayoutSelection resolveToolsSelection(LayoutCatalog layoutCatalog, Set<String> excludedLayouts) {
         Set<String> targets = new LinkedHashSet<>()
         layoutCatalog.layoutNames().each { String name ->
+            if (excludedLayouts.contains(name)) {
+                return
+            }
             Map<String, LayoutSpec> variants = layoutCatalog.load(name)
-            if (!excludedLayouts.contains(name) && variants.values().any { LayoutSpec spec -> spec.marked }) {
+            if (variants.values().any { LayoutSpec spec -> spec.marked }) {
                 targets.add(name)
             }
         }
@@ -496,11 +499,11 @@ class GenerateX2cTask extends DefaultTask {
             String name = queue[i]
             layoutCatalog.load(name).values().each { LayoutSpec spec ->
                 spec.includes.each { String includeName ->
-                    if (!layoutCatalog.contains(includeName)) {
+                    if (!layoutCatalog.contains(includeName) || excludedLayouts.contains(includeName)) {
                         return
                     }
                     layoutCatalog.load(includeName)
-                    if (!excludedLayouts.contains(includeName) && targets.add(includeName)) {
+                    if (targets.add(includeName)) {
                         queue.add(includeName)
                     }
                 }
