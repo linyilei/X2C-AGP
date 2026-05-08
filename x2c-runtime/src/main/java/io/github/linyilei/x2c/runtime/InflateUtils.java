@@ -123,6 +123,17 @@ public final class InflateUtils {
         shouldWrapContext();
     }
 
+    public static void clearPrewarmState() {
+        synchronized (InflateUtils.class) {
+            sAppCompatInflaterBridges.clear();
+            sAppCompatInflaterBridgeMisses.clear();
+            sAppCompatStyleableInfo = null;
+            sAppCompatStyleableLookupAttempted = false;
+            sWrapContextEnabled = null;
+            sWrapContextLookupAttempted = false;
+        }
+    }
+
     @NonNull
     public static View include(@NonNull Context context, @NonNull ViewGroup parent, int layoutId, @NonNull AttributeSet includeAttrs) {
         Context themedContext = applyIncludeTheme(context, includeAttrs);
