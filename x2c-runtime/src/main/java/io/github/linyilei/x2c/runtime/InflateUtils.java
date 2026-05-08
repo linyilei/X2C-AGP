@@ -76,11 +76,7 @@ public final class InflateUtils {
         if (parent == null) {
             return null;
         }
-        try {
-            return parent.generateLayoutParams(attrs);
-        } catch (RuntimeException ignore) {
-            return null;
-        }
+        return parent.generateLayoutParams(attrs);
     }
 
     public static void addView(@NonNull ViewGroup parent, @NonNull View child, @Nullable AttributeSet attrs) {
