@@ -9,6 +9,7 @@ import com.squareup.javapoet.TypeName
 import com.squareup.javapoet.TypeSpec
 import com.squareup.javapoet.WildcardTypeName
 import org.gradle.api.DefaultTask
+import org.gradle.api.GradleException
 import org.gradle.api.Plugin
 import org.gradle.api.Project
 import org.gradle.api.attributes.Attribute
@@ -465,16 +466,22 @@ class GenerateX2cTask extends DefaultTask {
 
     private LayoutSelection resolveAnnotationSelection(LayoutCatalog layoutCatalog, Set<String> excludedLayouts) {
         Set<String> targets = new LinkedHashSet<>()
+        Set<String> missingLayouts = new LinkedHashSet<>()
         scanAnnotatedLayoutTargets().each { String name ->
             if (excludedLayouts.contains(name)) {
                 project.logger.lifecycle("X2C skipped annotated layout ${name} because it is blacklisted.")
                 return
             }
             if (!layoutCatalog.contains(name)) {
-                project.logger.warn("X2C annotated layout ${name} was not found under res/layout*.")
+                missingLayouts.add(name)
                 return
             }
             targets.add(name)
+        }
+        if (!missingLayouts.isEmpty()) {
+            throw new GradleException("X2C annotation mode could not find layouts: "
+                    + missingLayouts.sort().join(', ')
+                    + ". Check @Xml(layouts = ...) entries under ${project.path}.")
         }
         expandIncludedTargets(layoutCatalog, targets, excludedLayouts)
         return new LayoutSelection(layoutCatalog.snapshot(), targets)
@@ -529,11 +536,14 @@ class GenerateX2cTask extends DefaultTask {
         } catch (Exception ignored) {
             return [] as Set<String>
         }
+        source = source
+                .replaceAll(/(?s)\/\*.*?\*\//, '')
+                .replaceAll(/(?m)^\s*\/\/.*$/, '')
         Set<String> layouts = new LinkedHashSet<>()
-        def matcher = (source =~ /@Xml\s*\(([\s\S]*?)\)/)
+        def matcher = (source =~ /@Xml\s*\(\s*layouts\s*=\s*(\{[\s\S]*?\}|["'][A-Za-z0-9_]+["'])\s*\)/)
         while (matcher.find()) {
-            String body = matcher.group(1)
-            def nameMatcher = (body =~ /["']([A-Za-z0-9_]+)["']/)
+            String layoutsArgument = matcher.group(1)
+            def nameMatcher = (layoutsArgument =~ /["']([A-Za-z0-9_]+)["']/)
             while (nameMatcher.find()) {
                 layouts.add(nameMatcher.group(1))
             }
