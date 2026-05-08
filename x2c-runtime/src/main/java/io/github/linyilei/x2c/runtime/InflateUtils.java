@@ -129,7 +129,8 @@ public final class InflateUtils {
 
     @NonNull
     public static View include(@NonNull Context context, @NonNull ViewGroup parent, int layoutId, @NonNull AttributeSet includeAttrs) {
-        View view = X2C.inflate(context, layoutId, parent, false);
+        Context themedContext = applyIncludeTheme(context, includeAttrs);
+        View view = X2C.inflate(themedContext, layoutId, parent, false);
         ViewGroup.LayoutParams params = generateLayoutParams(parent, includeAttrs);
         if (params == null) {
             params = view.getLayoutParams();
