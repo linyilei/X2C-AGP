@@ -4,7 +4,7 @@ This project contains an initial SDK-style implementation for build-time layout 
 
 ## Goals
 
-- The Gradle plugin scans Android layout resources instead of relying on annotations.
+- The Gradle plugin scans Android layout resources starting from explicit `@Xml(layouts = "...")` entrypoints.
 - Generated code keeps standard tags close to normal `LayoutInflater` behavior by reusing AppCompat / Material inflater paths when available, while preserving `AttributeSet`, styles, and theme values.
 - `include` and root `merge` are handled explicitly in generated code.
 
@@ -64,45 +64,14 @@ dependencies {
 }
 ```
 
-Choose a generation mode in Gradle first. The default `tools` mode scans `res/layout*` and starts from layouts marked with `tools:x2c="standard"`. The recommended setup is a root-level global switch:
-
-```groovy
-ext.x2cMode = 'tools'
-```
-
-If you want an explicit entry set instead, switch to `annotation` mode. The plugin will scan `@Xml(layouts = "...")` usages and then expand `include` dependencies recursively:
-
-```groovy
-ext.x2cMode = 'annotation'
-```
-
-If needed, a module can still override the global mode locally:
-
-```groovy
-x2c {
-    mode = 'annotation'
-}
-```
+The plugin scans `@Xml(layouts = "...")` usages and then expands `include` dependencies recursively.
 
 You can also blacklist layouts by name so they are skipped as generation targets:
 
 ```groovy
 x2c {
-    mode = 'annotation'
     blacklist = ['debug_panel', 'legacy_banner']
 }
-```
-
-In `tools` mode, opt in a layout by adding `tools:x2c="standard"` on its root tag:
-
-```xml
-<LinearLayout
-    xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:tools="http://schemas.android.com/tools"
-    android:layout_width="match_parent"
-    android:layout_height="match_parent"
-    tools:x2c="standard">
-</LinearLayout>
 ```
 
 Inflate through the runtime entrypoint:
@@ -111,9 +80,9 @@ Inflate through the runtime entrypoint:
 X2C.setContentView(this, R.layout.activity_main);
 ```
 
-For `include`, the plugin follows referenced layouts recursively. Included layouts do not need their own `tools:x2c` marker.
+For `include`, the plugin follows referenced layouts recursively. Included layouts do not need their own annotation.
 
-In `annotation` mode, declare the entry layout in code:
+Declare the entry layout in code:
 
 ```java
 @Xml(layouts = "activity_main")
@@ -205,7 +174,7 @@ dependencies {
 }
 ```
 
-Each Android library generates its own `X2CGroup` and `X2CModuleIndex` under `<manifest package>.x2c`. Application modules generate an app-level `X2CRootIndex`, scan dependency classes/jars/AARs for `X2CModuleIndex`, and only load a library group when a layout from that group is requested.
+Each Android library generates its own `X2CGroup` and `X2CModuleIndex` under `<manifest package>.x2c`. Application modules generate an app-level `X2CRootIndex`, read module-index markers from dependency artifacts, and only load a library group when a layout from that group is requested.
 
 This allows app layouts to include a normal-root layout from a feature/library module. When an included target layout has a root `<merge>`, X2C follows native `LayoutInflater` behavior: include-tag `LayoutParams`, `android:id`, and `android:visibility` are ignored, merge children are attached directly to the parent, and include-tag `android:theme` still wraps the inflated subtree.
 

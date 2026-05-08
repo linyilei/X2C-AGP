@@ -170,29 +170,7 @@ class X2cPlugin implements Plugin<Project> {
 
 class X2cExtension {
 
-    static final String MODE_TOOLS = 'tools'
-    static final String MODE_ANNOTATION = 'annotation'
-
-    private String mode
-    private boolean modeConfigured
     private final Set<String> excludedLayouts = new LinkedHashSet<>()
-
-    String normalizedMode() {
-        normalizeMode(modeConfigured ? mode : MODE_TOOLS)
-    }
-
-    void setMode(String value) {
-        mode = value
-        modeConfigured = true
-    }
-
-    String getMode() {
-        return mode
-    }
-
-    boolean hasConfiguredMode() {
-        return modeConfigured
-    }
 
     Set<String> normalizedExcludedLayouts() {
         return new LinkedHashSet<>(excludedLayouts)
@@ -236,23 +214,6 @@ class X2cExtension {
             if (normalized != null) {
                 excludedLayouts.add(normalized)
             }
-        }
-    }
-
-    static String normalizeMode(String rawMode) {
-        String normalized = rawMode == null ? MODE_TOOLS : rawMode.trim().toLowerCase(Locale.US)
-        switch (normalized) {
-            case MODE_TOOLS:
-            case 'full':
-                return MODE_TOOLS
-            case MODE_ANNOTATION:
-            case 'annotations':
-            case 'annotationonly':
-            case 'annotation-only':
-            case 'annotation_only':
-                return MODE_ANNOTATION
-            default:
-                throw new IllegalArgumentException("Unsupported X2C mode '${rawMode}'. Use 'tools' or 'annotation'.")
         }
     }
 
@@ -314,15 +275,6 @@ class GenerateX2cTask extends DefaultTask {
     }
 
     @Input
-    String getX2cMode() {
-        String configuredMode = extensionConfig != null && extensionConfig.hasConfiguredMode()
-                ? extensionConfig.mode
-                : null
-        String globalMode = resolveGlobalMode()
-        return X2cExtension.normalizeMode(configuredMode ?: globalMode ?: X2cExtension.MODE_TOOLS)
-    }
-
-    @Input
     List<String> getX2cExcludedLayouts() {
         Set<String> excluded = extensionConfig == null
                 ? new LinkedHashSet<String>()
@@ -370,12 +322,12 @@ class GenerateX2cTask extends DefaultTask {
         javaResOutputDir.mkdirs()
 
         LayoutCatalog layoutCatalog = new LayoutCatalog(indexLayoutFiles(resDirs), project)
-        LayoutSelection selection = resolveLayoutSelection(layoutCatalog, getX2cMode(), new LinkedHashSet<>(getX2cExcludedLayouts()))
+        LayoutSelection selection = resolveLayoutSelection(layoutCatalog, new LinkedHashSet<>(getX2cExcludedLayouts()))
         Map<String, Map<String, LayoutSpec>> layouts = selection.layouts
         Set<String> targets = selection.targets
         List<String> moduleIndexClassNames = findModuleIndexClassNames()
         if (targets.isEmpty() && moduleIndexClassNames.isEmpty()) {
-            project.logger.lifecycle("X2C found no layouts selected in ${getX2cMode()} mode.")
+            project.logger.lifecycle('X2C found no annotated layouts selected.')
             return
         }
 
@@ -530,46 +482,7 @@ class GenerateX2cTask extends DefaultTask {
         }
     }
 
-    private String resolveGlobalMode() {
-        List<Object> candidates = [
-                project.findProperty('x2cMode'),
-                project.findProperty('x2c.mode'),
-                project.rootProject.findProperty('x2cMode'),
-                project.rootProject.findProperty('x2c.mode')
-        ]
-        Object configured = candidates.find { Object value ->
-            value != null && value.toString().trim().length() > 0
-        }
-        return configured == null ? null : configured.toString()
-    }
-
-    private LayoutSelection resolveLayoutSelection(LayoutCatalog layoutCatalog, String mode, Set<String> excludedLayouts) {
-        switch (mode) {
-            case X2cExtension.MODE_TOOLS:
-                return resolveToolsSelection(layoutCatalog, excludedLayouts)
-            case X2cExtension.MODE_ANNOTATION:
-                return resolveAnnotationSelection(layoutCatalog, excludedLayouts)
-            default:
-                throw new IllegalArgumentException("Unsupported X2C mode '${mode}'.")
-        }
-    }
-
-    private LayoutSelection resolveToolsSelection(LayoutCatalog layoutCatalog, Set<String> excludedLayouts) {
-        Set<String> targets = new LinkedHashSet<>()
-        layoutCatalog.layoutNames().each { String name ->
-            if (excludedLayouts.contains(name)) {
-                return
-            }
-            Map<String, LayoutSpec> variants = layoutCatalog.load(name)
-            if (variants.values().any { LayoutSpec spec -> spec.marked }) {
-                targets.add(name)
-            }
-        }
-        expandIncludedTargets(layoutCatalog, targets, excludedLayouts)
-        return new LayoutSelection(layoutCatalog.snapshot(), targets)
-    }
-
-    private LayoutSelection resolveAnnotationSelection(LayoutCatalog layoutCatalog, Set<String> excludedLayouts) {
+    private LayoutSelection resolveLayoutSelection(LayoutCatalog layoutCatalog, Set<String> excludedLayouts) {
         Set<String> targets = new LinkedHashSet<>()
         Set<String> missingLayouts = new LinkedHashSet<>()
         scanAnnotatedLayoutTargets().each { String name ->
@@ -584,7 +497,7 @@ class GenerateX2cTask extends DefaultTask {
             targets.add(name)
         }
         if (!missingLayouts.isEmpty()) {
-            throw new GradleException("X2C annotation mode could not find layouts: "
+            throw new GradleException("X2C could not find annotated layouts: "
                     + missingLayouts.sort().join(', ')
                     + ". Check @Xml(layouts = ...) entries under ${project.path}.")
         }
@@ -718,7 +631,6 @@ class LayoutParser {
             Element root = factory.newDocumentBuilder().parse(file).documentElement
             LayoutNode rootNode = parseElement(root)
             LayoutSpec spec = new LayoutSpec(layoutName, qualifier, file, rootNode)
-            spec.marked = isMarked(root)
             collectIncludes(rootNode, spec.includes)
             spec.unsupported = containsUnsupported(rootNode)
             return spec
@@ -743,11 +655,6 @@ class LayoutParser {
             child = child.nextSibling
         }
         node
-    }
-
-    private static boolean isMarked(Element root) {
-        String value = root.getAttribute('tools:x2c')
-        return 'standard' == value || 'true' == value
     }
 
     private static void collectIncludes(LayoutNode node, Set<String> includes) {
@@ -791,10 +698,6 @@ class LayoutCatalog {
 
     boolean contains(String layoutName) {
         return layoutFiles.containsKey(layoutName)
-    }
-
-    Set<String> layoutNames() {
-        return new LinkedHashSet<>(layoutFiles.keySet())
     }
 
     Map<String, LayoutSpec> load(String layoutName) {
@@ -1336,7 +1239,6 @@ class LayoutSpec {
     final String qualifier
     final File file
     final LayoutNode root
-    boolean marked
     boolean unsupported
     final Set<String> includes = new LinkedHashSet<>()
 
