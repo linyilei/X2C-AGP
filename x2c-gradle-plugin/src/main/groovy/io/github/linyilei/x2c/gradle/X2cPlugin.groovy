@@ -26,6 +26,10 @@ import org.w3c.dom.Node
 
 import javax.xml.parsers.DocumentBuilderFactory
 import javax.lang.model.element.Modifier
+import java.io.BufferedReader
+import java.io.InputStream
+import java.io.InputStreamReader
+import java.nio.charset.StandardCharsets
 import java.util.zip.ZipFile
 import java.util.zip.ZipInputStream
 
@@ -51,8 +55,10 @@ class X2cPlugin implements Plugin<Project> {
         variants.all { variant ->
             String taskName = "generate${variant.name.capitalize()}X2C"
             File outputDir = project.file("${project.buildDir}/generated/source/x2c/${variant.name}")
+            File javaResOutputDir = project.file("${project.buildDir}/generated/java-res/x2c/${variant.name}")
             def task = project.tasks.create(taskName, GenerateX2cTask) {
                 it.outputDir = outputDir
+                it.javaResOutputDir = javaResOutputDir
                 it.applicationModule = applicationModule
                 it.extensionConfig = extension
                 it.generatedPackage = applicationModule ? variant.applicationId + '.x2c' : libraryGeneratedPackage
@@ -65,12 +71,21 @@ class X2cPlugin implements Plugin<Project> {
                 }
                 if (applicationModule) {
                     def runtimeClasspath = project.configurations.findByName("${variant.name}RuntimeClasspath")
-                    it.moduleIndexClasspath = runtimeClasspath == null
+                    it.moduleIndexMarkerClasspath = runtimeClasspath == null
                             ? project.files()
-                            : moduleIndexClasspath(project, runtimeClasspath)
+                            : moduleIndexMarkerClasspath(project, runtimeClasspath)
+                    it.moduleIndexFallbackClasspath = runtimeClasspath == null
+                            ? project.files()
+                            : moduleIndexFallbackClasspath(project, runtimeClasspath)
                 }
             }
             variant.registerJavaGeneratingTask(task, outputDir)
+            if (!applicationModule) {
+                variant.processJavaResourcesProvider.configure { processTask ->
+                    processTask.dependsOn(task)
+                    processTask.from(task.javaResOutputDir)
+                }
+            }
         }
     }
 
@@ -93,15 +108,26 @@ class X2cPlugin implements Plugin<Project> {
         new ArrayList<>(sourceDirs)
     }
 
-    private static FileCollection moduleIndexClasspath(Project project, def runtimeClasspath) {
+    private static FileCollection moduleIndexMarkerClasspath(Project project, def runtimeClasspath) {
+        Attribute<String> artifactType = Attribute.of('artifactType', String)
+        FileCollection javaRes = runtimeClasspath.incoming.artifactView { view ->
+            view.attributes.attribute(artifactType, 'android-java-res')
+        }.files
+        project.files(javaRes)
+    }
+
+    private static FileCollection moduleIndexFallbackClasspath(Project project, def runtimeClasspath) {
         Attribute<String> artifactType = Attribute.of('artifactType', String)
         FileCollection androidClassesJars = runtimeClasspath.incoming.artifactView { view ->
             view.attributes.attribute(artifactType, 'android-classes-jar')
         }.files
+        FileCollection androidClassesDirs = runtimeClasspath.incoming.artifactView { view ->
+            view.attributes.attribute(artifactType, 'android-classes-directory')
+        }.files
         FileCollection jars = runtimeClasspath.incoming.artifactView { view ->
             view.attributes.attribute(artifactType, 'jar')
         }.files
-        project.files(androidClassesJars, jars)
+        project.files(androidClassesJars, androidClassesDirs, jars)
     }
 
     private static String resolveManifestPackage(Project project, def android) {
@@ -252,8 +278,14 @@ class X2cExtension {
 
 class GenerateX2cTask extends DefaultTask {
 
+    static final String MODULE_INDEX_MARKER_DIR = 'META-INF/x2c'
+    static final String MODULE_INDEX_MARKER_SUFFIX = '.module-index'
+
     @OutputDirectory
     File outputDir
+
+    @OutputDirectory
+    File javaResOutputDir
 
     @org.gradle.api.tasks.Internal
     X2cExtension extensionConfig
@@ -263,7 +295,8 @@ class GenerateX2cTask extends DefaultTask {
     boolean applicationModule
     List<File> resDirs = []
     List<File> sourceDirs = []
-    FileCollection moduleIndexClasspath
+    FileCollection moduleIndexMarkerClasspath
+    FileCollection moduleIndexFallbackClasspath
 
     @Input
     String getX2cGeneratedPackage() {
@@ -311,8 +344,14 @@ class GenerateX2cTask extends DefaultTask {
 
     @InputFiles
     @Classpath
-    FileCollection getX2cModuleIndexClasspath() {
-        return moduleIndexClasspath ?: project.files()
+    FileCollection getX2cModuleIndexMarkerClasspath() {
+        return moduleIndexMarkerClasspath ?: project.files()
+    }
+
+    @InputFiles
+    @Classpath
+    FileCollection getX2cModuleIndexFallbackClasspath() {
+        return moduleIndexFallbackClasspath ?: project.files()
     }
 
     @TaskAction
@@ -327,6 +366,8 @@ class GenerateX2cTask extends DefaultTask {
         }
         deleteDir(outputDir)
         outputDir.mkdirs()
+        deleteDir(javaResOutputDir)
+        javaResOutputDir.mkdirs()
 
         LayoutCatalog layoutCatalog = new LayoutCatalog(indexLayoutFiles(resDirs), project)
         LayoutSelection selection = resolveLayoutSelection(layoutCatalog, getX2cMode(), new LinkedHashSet<>(getX2cExcludedLayouts()))
@@ -338,7 +379,7 @@ class GenerateX2cTask extends DefaultTask {
             return
         }
 
-        JavaWriter writer = new JavaWriter(outputDir, generatedPackage, rPackage, layouts, targets,
+        JavaWriter writer = new JavaWriter(outputDir, javaResOutputDir, generatedPackage, rPackage, layouts, targets,
                 moduleIndexClassNames, applicationModule, project)
         writer.writeAll()
     }
@@ -348,10 +389,57 @@ class GenerateX2cTask extends DefaultTask {
             return []
         }
         Set<String> classNames = new LinkedHashSet<>()
-        getX2cModuleIndexClasspath().files.each { File file ->
-            scanModuleIndexClasses(file, classNames)
+        getX2cModuleIndexMarkerClasspath().files.each { File file ->
+            scanModuleIndexMarkers(file, classNames)
+        }
+        if (classNames.isEmpty()) {
+            getX2cModuleIndexFallbackClasspath().files.each { File file ->
+                scanModuleIndexClasses(file, classNames)
+            }
         }
         classNames.sort()
+    }
+
+    private static void scanModuleIndexMarkers(File file, Set<String> classNames) {
+        if (file == null || !file.exists()) {
+            return
+        }
+        if (file.isDirectory()) {
+            File markerDir = new File(file, MODULE_INDEX_MARKER_DIR)
+            File[] markerFiles = markerDir.listFiles()
+            if (markerFiles != null) {
+                markerFiles.findAll { File markerFile -> markerFile.isFile() }
+                        .each { File markerFile ->
+                    markerFile.withReader('UTF-8') { BufferedReader reader ->
+                        addModuleIndexClasses(reader, classNames)
+                    }
+                }
+            }
+            return
+        }
+        if (file.name.endsWith('.jar') || file.name.endsWith('.zip')) {
+            try {
+                ZipFile zipFile = new ZipFile(file)
+                try {
+                    zipFile.entries().each { entry ->
+                        if (entry.directory || !entry.name.startsWith(MODULE_INDEX_MARKER_DIR + '/')
+                                || !entry.name.endsWith(MODULE_INDEX_MARKER_SUFFIX)) {
+                            return
+                        }
+                        InputStream inputStream = zipFile.getInputStream(entry)
+                        try {
+                            addModuleIndexClasses(new BufferedReader(new InputStreamReader(inputStream, StandardCharsets.UTF_8)), classNames)
+                        } finally {
+                            inputStream.close()
+                        }
+                    }
+                } finally {
+                    zipFile.close()
+                }
+            } catch (Exception ignored) {
+                // Not a readable zip or no marker present.
+            }
+        }
     }
 
     private static void scanModuleIndexClasses(File file, Set<String> classNames) {
@@ -428,6 +516,17 @@ class GenerateX2cTask extends DefaultTask {
         String normalized = entryName.replace('\\', '/')
         if (normalized == 'x2c/X2CModuleIndex.class' || normalized.endsWith('/x2c/X2CModuleIndex.class')) {
             classNames.add(normalized.substring(0, normalized.length() - '.class'.length()).replace('/', '.'))
+        }
+    }
+
+    private static void addModuleIndexClasses(BufferedReader reader, Set<String> classNames) {
+        String line = reader.readLine()
+        while (line != null) {
+            String className = line.trim()
+            if (!className.isEmpty() && !className.startsWith('#')) {
+                classNames.add(className)
+            }
+            line = reader.readLine()
         }
     }
 
@@ -751,6 +850,7 @@ class JavaWriter {
     private static final ClassName EXCEPTION = ClassName.get('java.lang', 'Exception')
 
     private final File outputDir
+    private final File javaResOutputDir
     private final String generatedPackage
     private final String rPackage
     private final Map<String, Map<String, LayoutSpec>> layouts
@@ -759,10 +859,11 @@ class JavaWriter {
     private final boolean applicationModule
     private final Project project
 
-    JavaWriter(File outputDir, String generatedPackage, String rPackage,
+    JavaWriter(File outputDir, File javaResOutputDir, String generatedPackage, String rPackage,
                Map<String, Map<String, LayoutSpec>> layouts, Set<String> targets,
                List<String> moduleIndexClassNames, boolean applicationModule, Project project) {
         this.outputDir = outputDir
+        this.javaResOutputDir = javaResOutputDir
         this.generatedPackage = generatedPackage
         this.rPackage = rPackage
         this.layouts = layouts
@@ -788,6 +889,7 @@ class JavaWriter {
             writeRootIndex()
         } else {
             writeModuleIndex()
+            writeModuleIndexMarker()
         }
     }
 
@@ -829,6 +931,16 @@ class JavaWriter {
                 .addMethod(nextGroupIdMethod())
                 .build()
         writeJavaFile(typeSpec)
+    }
+
+    private void writeModuleIndexMarker() {
+        if (!targets.any { String layoutName -> canGenerateLayout(layoutName) }) {
+            return
+        }
+        File markerFile = new File(javaResOutputDir,
+                "${GenerateX2cTask.MODULE_INDEX_MARKER_DIR}/${generatedPackage}${GenerateX2cTask.MODULE_INDEX_MARKER_SUFFIX}")
+        markerFile.parentFile.mkdirs()
+        markerFile.setText("${generatedPackage}.X2CModuleIndex\n", 'UTF-8')
     }
 
     private void writeRootIndex() {
