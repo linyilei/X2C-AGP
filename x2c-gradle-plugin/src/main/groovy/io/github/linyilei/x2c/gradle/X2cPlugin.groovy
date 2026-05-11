@@ -2,6 +2,7 @@ package io.github.linyilei.x2c.gradle
 
 import com.android.build.api.transform.Format
 import com.android.build.api.transform.QualifiedContent
+import com.android.build.api.transform.Status
 import com.android.build.api.transform.Transform
 import com.android.build.api.transform.TransformInvocation
 import com.squareup.javapoet.AnnotationSpec
@@ -287,12 +288,15 @@ class X2CRuntimeTransform extends Transform {
 
     @Override
     boolean isIncremental() {
-        return false
+        return true
     }
 
     @Override
     void transform(TransformInvocation invocation) {
-        invocation.outputProvider.deleteAll()
+        boolean incremental = invocation.incremental
+        if (!incremental) {
+            invocation.outputProvider.deleteAll()
+        }
         GenerateX2cTask task = tasksByVariant[invocation.context.variantName]
         String generatedRootInternalName = generatedRootInternalName(task)
         boolean patchRootLoader = generatedRootInternalName != null
@@ -302,19 +306,29 @@ class X2CRuntimeTransform extends Transform {
             input.directoryInputs.each { directoryInput ->
                 File outputDir = invocation.outputProvider.getContentLocation(directoryInput.name,
                         directoryInput.contentTypes, directoryInput.scopes, Format.DIRECTORY)
-                copyDirectory(directoryInput.file, outputDir, generatedRootInternalName, patchRootLoader, patchedX2CClasses)
+                if (incremental) {
+                    copyChangedDirectoryFiles(directoryInput.file, outputDir, directoryInput.changedFiles,
+                            generatedRootInternalName, patchRootLoader, patchedX2CClasses)
+                } else {
+                    copyDirectory(directoryInput.file, outputDir, generatedRootInternalName, patchRootLoader, patchedX2CClasses)
+                }
             }
             input.jarInputs.each { jarInput ->
                 File outputJar = invocation.outputProvider.getContentLocation(jarInput.name,
                         jarInput.contentTypes, jarInput.scopes, Format.JAR)
-                copyJar(jarInput.file, outputJar, generatedRootInternalName, patchRootLoader, patchedX2CClasses)
+                if (incremental) {
+                    copyChangedJar(jarInput.file, outputJar, jarInput.status,
+                            generatedRootInternalName, patchRootLoader, patchedX2CClasses)
+                } else {
+                    copyJar(jarInput.file, outputJar, generatedRootInternalName, patchRootLoader, patchedX2CClasses)
+                }
             }
         }
 
         if (patchRootLoader) {
-            if (patchedX2CClasses[0] == 0) {
+            if (!incremental && patchedX2CClasses[0] == 0) {
                 project.logger.warn('X2C ASM did not find io.github.linyilei.x2c.runtime.X2C to inject the generated root index.')
-            } else {
+            } else if (patchedX2CClasses[0] > 0) {
                 project.logger.info("X2C ASM injected generated root index into ${patchedX2CClasses[0]} X2C runtime class file(s).")
             }
         }
@@ -343,14 +357,63 @@ class X2CRuntimeTransform extends Transform {
             }
             String relativePath = inputDir.toPath().relativize(child.toPath()).toString()
                     .replace(File.separatorChar, '/' as char)
+            copyDirectoryFile(child, new File(outputDir, relativePath), relativePath,
+                    generatedRootInternalName, patchRootLoader, patchedX2CClasses)
+        }
+    }
+
+    private static void copyChangedDirectoryFiles(File inputDir, File outputDir, Map<File, Status> changedFiles,
+                                                  String generatedRootInternalName, boolean patchRootLoader,
+                                                  int[] patchedX2CClasses) {
+        if (inputDir == null || changedFiles == null || changedFiles.isEmpty()) {
+            return
+        }
+        changedFiles.each { File changedFile, Status status ->
+            String relativePath = inputDir.toPath().relativize(changedFile.toPath()).toString()
+                    .replace(File.separatorChar, '/' as char)
             File outputFile = new File(outputDir, relativePath)
-            outputFile.parentFile.mkdirs()
-            byte[] bytes = child.bytes
-            if (patchRootLoader && relativePath == X2C_CLASS_ENTRY) {
-                bytes = patchX2CRootIndexLoader(bytes, generatedRootInternalName)
-                patchedX2CClasses[0]++
+            if (status == Status.REMOVED) {
+                deletePath(outputFile)
+            } else if (status == Status.ADDED || status == Status.CHANGED) {
+                if (changedFile.isFile()) {
+                    copyDirectoryFile(changedFile, outputFile, relativePath,
+                            generatedRootInternalName, patchRootLoader, patchedX2CClasses)
+                } else if (changedFile.isDirectory()) {
+                    outputFile.mkdirs()
+                }
             }
-            outputFile.bytes = bytes
+        }
+    }
+
+    private static void copyDirectoryFile(File inputFile, File outputFile, String relativePath,
+                                          String generatedRootInternalName, boolean patchRootLoader,
+                                          int[] patchedX2CClasses) {
+        outputFile.parentFile.mkdirs()
+        byte[] bytes = inputFile.bytes
+        if (patchRootLoader && relativePath == X2C_CLASS_ENTRY) {
+            bytes = patchX2CRootIndexLoader(bytes, generatedRootInternalName)
+            patchedX2CClasses[0]++
+        }
+        outputFile.bytes = bytes
+    }
+
+    private static void copyChangedJar(File inputJar, File outputJar, Status status, String generatedRootInternalName,
+                                       boolean patchRootLoader, int[] patchedX2CClasses) {
+        if (status == Status.REMOVED) {
+            deletePath(outputJar)
+        } else if (status == Status.ADDED || status == Status.CHANGED) {
+            copyJar(inputJar, outputJar, generatedRootInternalName, patchRootLoader, patchedX2CClasses)
+        }
+    }
+
+    private static void deletePath(File file) {
+        if (file == null || !file.exists()) {
+            return
+        }
+        if (file.isDirectory()) {
+            file.deleteDir()
+        } else {
+            file.delete()
         }
     }
 
