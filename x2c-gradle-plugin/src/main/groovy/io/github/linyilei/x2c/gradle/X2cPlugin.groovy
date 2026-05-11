@@ -93,9 +93,9 @@ class X2cPlugin implements Plugin<Project> {
                     it.moduleIndexMarkerClasspath = runtimeClasspath == null
                             ? project.files()
                             : moduleIndexMarkerClasspath(project, runtimeClasspath)
-                    it.moduleIndexFallbackClasspath = runtimeClasspath == null
+                    it.moduleIndexClassClasspath = runtimeClasspath == null
                             ? project.files()
-                            : moduleIndexFallbackClasspath(project, runtimeClasspath)
+                            : moduleIndexClassClasspath(project, runtimeClasspath)
                     tasksByVariant[variant.name] = it
                 }
             }
@@ -198,7 +198,7 @@ class X2cPlugin implements Plugin<Project> {
         project.files(javaRes)
     }
 
-    private static FileCollection moduleIndexFallbackClasspath(Project project, def runtimeClasspath) {
+    private static FileCollection moduleIndexClassClasspath(Project project, def runtimeClasspath) {
         Attribute<String> artifactType = Attribute.of('artifactType', String)
         FileCollection androidClassesJars = runtimeClasspath.incoming.artifactView { view ->
             view.attributes.attribute(artifactType, 'android-classes-jar')
@@ -554,7 +554,7 @@ class GenerateX2cTask extends DefaultTask {
     List<File> resDirs = []
     List<File> sourceDirs = []
     FileCollection moduleIndexMarkerClasspath
-    FileCollection moduleIndexFallbackClasspath
+    FileCollection moduleIndexClassClasspath
 
     @Input
     String getX2cGeneratedPackage() {
@@ -604,8 +604,8 @@ class GenerateX2cTask extends DefaultTask {
 
     @InputFiles
     @Classpath
-    FileCollection getX2cModuleIndexFallbackClasspath() {
-        return moduleIndexFallbackClasspath ?: project.files()
+    FileCollection getX2cModuleIndexClassClasspath() {
+        return moduleIndexClassClasspath ?: project.files()
     }
 
     @TaskAction
@@ -647,11 +647,7 @@ class GenerateX2cTask extends DefaultTask {
         getX2cModuleIndexMarkerClasspath().files.each { File file ->
             scanModuleIndexMarkers(file, classNames)
         }
-        if (classNames.isEmpty()) {
-            getX2cModuleIndexFallbackClasspath().files.each { File file ->
-                scanModuleIndexClasses(file, classNames)
-            }
-        }
+        validateModuleIndexClasses(classNames)
         classNames.sort()
     }
 
@@ -697,80 +693,56 @@ class GenerateX2cTask extends DefaultTask {
         }
     }
 
-    private static void scanModuleIndexClasses(File file, Set<String> classNames) {
-        if (file == null || !file.exists()) {
+    private void validateModuleIndexClasses(Set<String> classNames) {
+        if (classNames.isEmpty()) {
+            return
+        }
+        Map<String, String> expectedEntries = new LinkedHashMap<>()
+        classNames.each { String className ->
+            expectedEntries[className.replace('.', '/') + '.class'] = className
+        }
+        Set<String> foundEntries = new HashSet<>()
+        getX2cModuleIndexClassClasspath().files.each { File file ->
+            scanExpectedClassEntries(file, expectedEntries.keySet(), foundEntries)
+        }
+        List<String> missingClassNames = expectedEntries.findAll { String entryName, String className ->
+            !foundEntries.contains(entryName)
+        }.values().sort()
+        if (!missingClassNames.isEmpty()) {
+            throw new GradleException("X2C module-index marker points to missing classes: "
+                    + missingClassNames.join(', ')
+                    + ". Check that dependencies publish Java classes together with META-INF/x2c markers.")
+        }
+    }
+
+    private static void scanExpectedClassEntries(File file, Set<String> expectedEntries, Set<String> foundEntries) {
+        if (file == null || !file.exists() || expectedEntries.isEmpty()) {
             return
         }
         if (file.isDirectory()) {
-            scanClassDirectory(file, classNames)
-            return
-        }
-        if (file.name.endsWith('.jar')) {
-            scanZipFile(file, classNames, false)
-            return
-        }
-        if (file.name.endsWith('.aar')) {
-            scanZipFile(file, classNames, true)
-        }
-    }
-
-    private static void scanClassDirectory(File dir, Set<String> classNames) {
-        dir.eachFileRecurse { File child ->
-            if (child.isFile() && child.name == 'X2CModuleIndex.class') {
-                String relativePath = dir.toPath().relativize(child.toPath()).toString().replace(File.separatorChar, '/' as char)
-                addModuleIndexClass(relativePath, classNames)
+            expectedEntries.each { String entryName ->
+                if (!foundEntries.contains(entryName) && new File(file, entryName).isFile()) {
+                    foundEntries.add(entryName)
+                }
             }
+            return
         }
-    }
-
-    private static void scanZipFile(File file, Set<String> classNames, boolean scanNestedJars) {
+        if (!file.name.endsWith('.jar') && !file.name.endsWith('.zip')) {
+            return
+        }
         try {
             ZipFile zipFile = new ZipFile(file)
             try {
                 zipFile.entries().each { entry ->
-                    if (entry.directory) {
-                        return
-                    }
-                    String name = entry.name
-                    if (name.endsWith('.class')) {
-                        addModuleIndexClass(name, classNames)
-                    } else if (scanNestedJars && (name == 'classes.jar' || (name.startsWith('libs/') && name.endsWith('.jar')))) {
-                        InputStream inputStream = zipFile.getInputStream(entry)
-                        try {
-                            scanJarStream(inputStream, classNames)
-                        } finally {
-                            inputStream.close()
-                        }
+                    if (!entry.directory && expectedEntries.contains(entry.name)) {
+                        foundEntries.add(entry.name)
                     }
                 }
             } finally {
                 zipFile.close()
             }
         } catch (Exception ignored) {
-            // Broken or non-zip files on the classpath are not X2C module indexes.
-        }
-    }
-
-    private static void scanJarStream(InputStream inputStream, Set<String> classNames) {
-        ZipInputStream zipInputStream = new ZipInputStream(inputStream)
-        try {
-            def entry = zipInputStream.nextEntry
-            while (entry != null) {
-                if (!entry.directory && entry.name.endsWith('.class')) {
-                    addModuleIndexClass(entry.name, classNames)
-                }
-                zipInputStream.closeEntry()
-                entry = zipInputStream.nextEntry
-            }
-        } finally {
-            zipInputStream.close()
-        }
-    }
-
-    private static void addModuleIndexClass(String entryName, Set<String> classNames) {
-        String normalized = entryName.replace('\\', '/')
-        if (normalized == 'x2c/X2CModuleIndex.class' || normalized.endsWith('/x2c/X2CModuleIndex.class')) {
-            classNames.add(normalized.substring(0, normalized.length() - '.class'.length()).replace('/', '.'))
+            // Broken or non-zip files on the classpath cannot satisfy marker validation.
         }
     }
 

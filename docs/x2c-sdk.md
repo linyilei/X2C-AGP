@@ -191,5 +191,5 @@ This repository keeps two resolution modes:
 
 - `fragment` and `requestFocus` tags are skipped and fall back to normal XML inflation.
 - Variant dispatch currently supports default, `land`, and `vNN` qualifiers.
-- App-level root indexing consumes dependency `META-INF/x2c/*.module-index` markers from project dependencies and remote AARs; AARs that do not contain a module index marker cannot be auto-indexed.
+- App-level root indexing consumes only dependency `META-INF/x2c/*.module-index` markers from project dependencies and remote AARs, and validates that each marker points to an existing index class; AARs that do not contain a module index marker cannot be auto-indexed.
 - DataBinding is intentionally out of scope for this phase.

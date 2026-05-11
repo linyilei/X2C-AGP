@@ -234,5 +234,5 @@ D/X2C: setContentView hit generated view: your.package:layout/activity_main
 ## 当前限制
 
 - `fragment`、`requestFocus` 暂不生成，遇到后回退 XML。
-- app 会优先读取依赖中的 `META-INF/x2c/*.module-index` marker 来聚合 project / 远端 AAR 的 library group；未由 X2C 插件生成模块索引的 AAR 无法自动纳入。
+- app 只读取依赖中的 `META-INF/x2c/*.module-index` marker 来聚合 project / 远端 AAR 的 library group，并校验 marker 指向的 index class 必须存在；未由 X2C 插件生成模块索引的 AAR 无法自动纳入。
 - DataBinding、ViewBinding 深度集成暂不在当前版本范围内。
