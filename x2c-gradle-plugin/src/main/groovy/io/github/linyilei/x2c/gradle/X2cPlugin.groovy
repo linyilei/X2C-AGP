@@ -7,7 +7,11 @@ import com.squareup.javapoet.MethodSpec
 import com.squareup.javapoet.ParameterizedTypeName
 import com.squareup.javapoet.TypeName
 import com.squareup.javapoet.TypeSpec
-import com.squareup.javapoet.WildcardTypeName
+import org.objectweb.asm.ClassReader
+import org.objectweb.asm.ClassVisitor
+import org.objectweb.asm.ClassWriter
+import org.objectweb.asm.MethodVisitor
+import org.objectweb.asm.Opcodes
 import org.gradle.api.DefaultTask
 import org.gradle.api.GradleException
 import org.gradle.api.Plugin
@@ -34,6 +38,10 @@ import java.util.zip.ZipFile
 import java.util.zip.ZipInputStream
 
 class X2cPlugin implements Plugin<Project> {
+
+    private static final String MODULE_INDEX_LOADER_METHOD = 'loadX2CModuleIndexes'
+    private static final String MODULE_INDEX_LOADER_DESC = '(Landroid/util/SparseIntArray;Landroid/util/SparseArray;)V'
+    private static final String X2C_ROOT_INDEX_INTERNAL_NAME = 'io/github/linyilei/x2c/runtime/X2CRootIndex'
 
     @Override
     void apply(Project project) {
@@ -80,6 +88,9 @@ class X2cPlugin implements Plugin<Project> {
                 }
             }
             variant.registerJavaGeneratingTask(task, outputDir)
+            if (applicationModule) {
+                configureRootIndexAsmInjection(project, variant, task)
+            }
             if (!applicationModule) {
                 variant.processJavaResourcesProvider.configure { processTask ->
                     processTask.dependsOn(task)
@@ -87,6 +98,65 @@ class X2cPlugin implements Plugin<Project> {
                 }
             }
         }
+    }
+
+    private static void configureRootIndexAsmInjection(Project project, def variant, GenerateX2cTask task) {
+        variant.javaCompileProvider.configure { javaCompile ->
+            javaCompile.doLast {
+                List<String> moduleIndexClassNames = task.findModuleIndexClassNames()
+                if (moduleIndexClassNames.isEmpty()) {
+                    return
+                }
+                File destinationDir = javaCompile.destinationDir
+                injectModuleIndexesIntoRootIndex(destinationDir, task.generatedPackage, moduleIndexClassNames, project)
+            }
+        }
+    }
+
+    private static void injectModuleIndexesIntoRootIndex(File classesDir, String generatedPackage,
+                                                         List<String> moduleIndexClassNames, Project project) {
+        if (classesDir == null || generatedPackage == null || generatedPackage.trim().isEmpty()) {
+            return
+        }
+        File rootIndexClass = new File(classesDir, generatedPackage.replace('.', '/') + '/X2CRootIndex.class')
+        if (!rootIndexClass.isFile()) {
+            throw new GradleException("X2C ASM could not find generated root index class: ${rootIndexClass}")
+        }
+        byte[] originalBytes = rootIndexClass.bytes
+        ClassReader reader = new ClassReader(originalBytes)
+        ClassWriter writer = new ClassWriter(reader, ClassWriter.COMPUTE_MAXS)
+        boolean[] patched = [false] as boolean[]
+        ClassVisitor visitor = new ClassVisitor(Opcodes.ASM7, writer) {
+            @Override
+            MethodVisitor visitMethod(int access, String name, String descriptor, String signature, String[] exceptions) {
+                if (MODULE_INDEX_LOADER_METHOD == name && MODULE_INDEX_LOADER_DESC == descriptor) {
+                    MethodVisitor mv = super.visitMethod(access, name, descriptor, signature, exceptions)
+                    mv.visitCode()
+                    moduleIndexClassNames.each { String className ->
+                        String internalName = className.replace('.', '/')
+                        mv.visitTypeInsn(Opcodes.NEW, internalName)
+                        mv.visitInsn(Opcodes.DUP)
+                        mv.visitMethodInsn(Opcodes.INVOKESPECIAL, internalName, '<init>', '()V', false)
+                        mv.visitVarInsn(Opcodes.ALOAD, 0)
+                        mv.visitVarInsn(Opcodes.ALOAD, 1)
+                        mv.visitMethodInsn(Opcodes.INVOKEINTERFACE, X2C_ROOT_INDEX_INTERNAL_NAME, 'loadInto',
+                                MODULE_INDEX_LOADER_DESC, true)
+                    }
+                    mv.visitInsn(Opcodes.RETURN)
+                    mv.visitMaxs(0, 0)
+                    mv.visitEnd()
+                    patched[0] = true
+                    return null
+                }
+                return super.visitMethod(access, name, descriptor, signature, exceptions)
+            }
+        }
+        reader.accept(visitor, 0)
+        if (!patched[0]) {
+            throw new GradleException("X2C ASM could not find ${MODULE_INDEX_LOADER_METHOD} in ${rootIndexClass}")
+        }
+        rootIndexClass.bytes = writer.toByteArray()
+        project.logger.info("X2C ASM registered ${moduleIndexClassNames.size()} module indexes in ${rootIndexClass.name}.")
     }
 
     private static List<File> resolveSourceDirectories(Project project, def sourceSet) {
@@ -332,11 +402,11 @@ class GenerateX2cTask extends DefaultTask {
         }
 
         JavaWriter writer = new JavaWriter(outputDir, javaResOutputDir, generatedPackage, rPackage, layouts, targets,
-                moduleIndexClassNames, applicationModule, project)
+                applicationModule, project)
         writer.writeAll()
     }
 
-    private List<String> findModuleIndexClassNames() {
+    List<String> findModuleIndexClassNames() {
         if (!applicationModule) {
             return []
         }
@@ -747,9 +817,6 @@ class JavaWriter {
     private static final ClassName X2C_ROOT_INDEX = ClassName.get('io.github.linyilei.x2c.runtime', 'X2CRootIndex')
     private static final ClassName INFLATE_UTILS = ClassName.get('io.github.linyilei.x2c.runtime', 'InflateUtils')
     private static final ClassName STRING = ClassName.get('java.lang', 'String')
-    private static final ClassName OBJECT = ClassName.get('java.lang', 'Object')
-    private static final ClassName CLASS = ClassName.get('java.lang', 'Class')
-    private static final ClassName THROWABLE = ClassName.get('java.lang', 'Throwable')
     private static final ClassName EXCEPTION = ClassName.get('java.lang', 'Exception')
 
     private final File outputDir
@@ -758,20 +825,18 @@ class JavaWriter {
     private final String rPackage
     private final Map<String, Map<String, LayoutSpec>> layouts
     private final Set<String> targets
-    private final List<String> moduleIndexClassNames
     private final boolean applicationModule
     private final Project project
 
     JavaWriter(File outputDir, File javaResOutputDir, String generatedPackage, String rPackage,
                Map<String, Map<String, LayoutSpec>> layouts, Set<String> targets,
-               List<String> moduleIndexClassNames, boolean applicationModule, Project project) {
+               boolean applicationModule, Project project) {
         this.outputDir = outputDir
         this.javaResOutputDir = javaResOutputDir
         this.generatedPackage = generatedPackage
         this.rPackage = rPackage
         this.layouts = layouts
         this.targets = targets
-        this.moduleIndexClassNames = moduleIndexClassNames
         this.applicationModule = applicationModule
         this.project = project
     }
@@ -857,14 +922,13 @@ class JavaWriter {
                 }
             }
         }
-        moduleIndexClassNames.each { String className ->
-            loadInto.addStatement('loadModuleIndex($S, layoutToGroup, groupClassNames)', className)
-        }
+        // The class names are intentionally kept out of source-level references; ASM injects direct calls after javac.
+        loadInto.addStatement('loadX2CModuleIndexes(layoutToGroup, groupClassNames)')
         TypeSpec typeSpec = TypeSpec.classBuilder('X2CRootIndex')
                 .addModifiers(Modifier.PUBLIC, Modifier.FINAL)
                 .addSuperinterface(X2C_ROOT_INDEX)
                 .addMethod(loadInto.build())
-                .addMethod(loadModuleIndexMethod())
+                .addMethod(loadX2CModuleIndexesMethod())
                 .addMethod(ensureGroupMethod())
                 .addMethod(nextGroupIdMethod())
                 .build()
@@ -1011,39 +1075,13 @@ class JavaWriter {
                 .addParameter(ParameterizedTypeName.get(SPARSE_ARRAY, STRING), 'groupClassNames')
     }
 
-    private MethodSpec loadModuleIndexMethod() {
-        ParameterizedTypeName classType = ParameterizedTypeName.get(CLASS, WildcardTypeName.subtypeOf(OBJECT))
+    private MethodSpec loadX2CModuleIndexesMethod() {
         ParameterizedTypeName stringArray = ParameterizedTypeName.get(SPARSE_ARRAY, STRING)
-        CodeBlock.Builder body = CodeBlock.builder()
-        body.beginControlFlow('try')
-        body.addStatement('$T clazz = $T.forName(className)', classType, CLASS)
-        body.addStatement('$T instance = clazz.getDeclaredConstructor().newInstance()', OBJECT)
-        body.beginControlFlow('if (!(instance instanceof $T))', X2C_ROOT_INDEX)
-        body.addStatement('return')
-        body.endControlFlow()
-        body.addStatement('$T moduleLayoutToGroup = new $T()', SPARSE_INT_ARRAY, SPARSE_INT_ARRAY)
-        body.addStatement('$T moduleGroupClassNames = new $T<>()', stringArray, SPARSE_ARRAY)
-        body.addStatement('(($T) instance).loadInto(moduleLayoutToGroup, moduleGroupClassNames)', X2C_ROOT_INDEX)
-        body.beginControlFlow('for (int i = 0; i < moduleLayoutToGroup.size(); i++)')
-        body.addStatement('int layoutId = moduleLayoutToGroup.keyAt(i)')
-        body.addStatement('int moduleGroupId = moduleLayoutToGroup.valueAt(i)')
-        body.addStatement('$T groupClassName = moduleGroupClassNames.get(moduleGroupId)', STRING)
-        body.beginControlFlow('if (groupClassName == null)')
-        body.addStatement('continue')
-        body.endControlFlow()
-        body.addStatement('layoutToGroup.put(layoutId, ensureGroup(groupClassNames, groupClassName))')
-        body.endControlFlow()
-        body.nextControlFlow('catch ($T ignored)', THROWABLE)
-        body.add('// Missing or incompatible module indexes should not block XML fallback.\n')
-        body.endControlFlow()
-
-        return MethodSpec.methodBuilder('loadModuleIndex')
+        return MethodSpec.methodBuilder('loadX2CModuleIndexes')
                 .addModifiers(Modifier.PRIVATE, Modifier.STATIC)
                 .returns(TypeName.VOID)
-                .addParameter(STRING, 'className')
                 .addParameter(SPARSE_INT_ARRAY, 'layoutToGroup')
                 .addParameter(stringArray, 'groupClassNames')
-                .addCode(body.build())
                 .build()
     }
 

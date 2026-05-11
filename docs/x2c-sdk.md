@@ -16,7 +16,7 @@ This project contains an initial SDK-style implementation for build-time layout 
 - `feature-demo`: Android library demo module.
 - `feature-nested`: transitive Android library demo module used by `feature-demo` to exercise `app -> feature-demo -> feature-nested` root-index aggregation.
 
-The plugin supports both application and Android library modules. Library modules generate their own group and module index. Application modules scan the dependency classpath for module indexes, merge them into the app root index, then runtime loads each group lazily on first use.
+The plugin supports both application and Android library modules. Library modules generate their own group and module index. Application modules read dependency module-index markers, merge them into the app root index, and inject direct module-index registration bytecode with ASM after javac. Runtime then loads each group lazily on first use.
 
 ## Published Artifacts
 
@@ -174,7 +174,7 @@ dependencies {
 }
 ```
 
-Each Android library generates its own `X2CGroup` and `X2CModuleIndex` under `<manifest package>.x2c`. Application modules generate an app-level `X2CRootIndex`, read module-index markers from dependency artifacts, and only load a library group when a layout from that group is requested.
+Each Android library generates its own `X2CGroup` and `X2CModuleIndex` under `<manifest package>.x2c`. Application modules generate an app-level `X2CRootIndex`, read module-index markers from dependency artifacts, and use ASM to replace the generated root-index placeholder with direct `X2CModuleIndex.loadInto(...)` calls. Runtime only loads a library group when a layout from that group is requested.
 
 This allows app layouts to include a normal-root layout from a feature/library module. When an included target layout has a root `<merge>`, X2C follows native `LayoutInflater` behavior: include-tag `LayoutParams`, `android:id`, and `android:visibility` are ignored, merge children are attached directly to the parent, and include-tag `android:theme` still wraps the inflated subtree.
 
@@ -190,5 +190,5 @@ This repository keeps two resolution modes:
 
 - `fragment` and `requestFocus` tags are skipped and fall back to normal XML inflation.
 - Variant dispatch currently supports default, `land`, and `vNN` qualifiers.
-- App-level root indexing consumes dependency `X2CModuleIndex` classes from project dependencies and remote AARs; AARs that do not contain a module index cannot be auto-indexed.
+- App-level root indexing consumes dependency `META-INF/x2c/*.module-index` markers from project dependencies and remote AARs; AARs that do not contain a module index marker cannot be auto-indexed.
 - DataBinding is intentionally out of scope for this phase.
