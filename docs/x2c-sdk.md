@@ -4,13 +4,14 @@ This project contains an initial SDK-style implementation for build-time layout 
 
 ## Goals
 
-- The Gradle plugin scans Android layout resources starting from explicit `@Xml(layouts = "...")` entrypoints.
+- The annotation processor scans explicit `@Xml(layouts = "...")` entrypoints. The Gradle plugin passes variant/resource options, aggregates library indexes, and performs ASM injection.
 - Generated code keeps standard tags close to normal `LayoutInflater` behavior by reusing AppCompat / Material inflater paths when available, while preserving `AttributeSet`, styles, and theme values.
 - `include` and root `merge` are handled explicitly in generated code.
 
 ## Modules
 
 - `x2c-runtime`: runtime API used by apps and generated code.
+- `x2c-compiler`: Java annotation processor that parses selected layouts and generates X2C Java sources.
 - `x2c-gradle-plugin`: standalone Gradle plugin implementation, exposed as `io.github.linyilei.x2c`.
 - `app`: host demo app.
 - `feature-demo`: Android library demo module.
@@ -21,9 +22,10 @@ The plugin supports both application and Android library modules. Library module
 ## Published Artifacts
 
 - `com.github.linyilei.X2C-AGP:x2c-runtime:v0.1.1`
+- `com.github.linyilei.X2C-AGP:x2c-compiler:v0.1.1`
 - `com.github.linyilei.X2C-AGP:x2c-gradle-plugin:v0.1.1`
 
-Both artifacts are configured for local Maven and JitPack. The Gradle plugin id remains `io.github.linyilei.x2c`; local sample builds resolve the implementation artifact from `mavenLocal()` first.
+All artifacts are configured for local Maven and JitPack. The Gradle plugin id remains `io.github.linyilei.x2c`; local sample builds resolve the implementation artifact from `mavenLocal()` first.
 
 ## App Integration
 
@@ -61,10 +63,11 @@ apply plugin: 'com.android.application'
 
 dependencies {
     implementation 'com.github.linyilei.X2C-AGP:x2c-runtime:v0.1.1'
+    annotationProcessor 'com.github.linyilei.X2C-AGP:x2c-compiler:v0.1.1'
 }
 ```
 
-The plugin scans `@Xml(layouts = "...")` usages and then expands `include` dependencies recursively.
+The annotation processor scans `@Xml(layouts = "...")` usages and then expands `include` dependencies recursively. The Gradle plugin wires the resource directories into JavaCompile inputs so XML changes rerun the processor.
 
 You can blacklist layouts by name so they are skipped as generation targets. `groupSize` controls generated group sharding and defaults to `64`, so each generated `X2CGroup` owns at most 64 layout factories:
 
@@ -172,6 +175,7 @@ apply plugin: 'io.github.linyilei.x2c'
 
 dependencies {
     implementation 'com.github.linyilei.X2C-AGP:x2c-runtime:v0.1.1'
+    annotationProcessor 'com.github.linyilei.X2C-AGP:x2c-compiler:v0.1.1'
 }
 ```
 
@@ -184,7 +188,7 @@ This allows app layouts to include a normal-root layout from a feature/library m
 This repository keeps two resolution modes:
 
 - Default sample builds resolve the plugin and runtime from published artifacts such as `mavenLocal()` or JitPack.
-- When `USE_LOCAL_X2C=true` is present, the repository switches to local `includeBuild('x2c-gradle-plugin')` and local `:x2c-runtime` source projects for end-to-end source verification.
+- When `USE_LOCAL_X2C=true` is present, the repository switches to local `includeBuild('x2c-gradle-plugin')` plus local `:x2c-runtime` and `:x2c-compiler` source projects for end-to-end source verification.
 - JitPack itself also enters source-project mode through its own `JITPACK=true` environment so the tagged source can be published directly.
 
 ## Current Limits

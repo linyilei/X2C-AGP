@@ -33,4 +33,5 @@ include ':feature-nested'
 def useLocalX2c = System.getenv('USE_LOCAL_X2C') == 'true' || System.getenv('JITPACK') == 'true'
 if (useLocalX2c) {
     include ':x2c-runtime'
+    include ':x2c-compiler'
 }

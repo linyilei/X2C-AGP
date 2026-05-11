@@ -1,0 +1,65 @@
+plugins {
+    id 'java-library'
+    id 'maven-publish'
+}
+
+group = System.getenv('JITPACK_GROUP') ?: 'com.github.linyilei.X2C-AGP'
+version = System.getenv('VERSION') ?: 'v0.1.1'
+
+repositories {
+    google()
+    mavenCentral()
+}
+
+dependencies {
+    implementation 'com.squareup:javapoet:1.13.0'
+}
+
+sourceCompatibility = JavaVersion.VERSION_1_8
+targetCompatibility = JavaVersion.VERSION_1_8
+
+java {
+    withSourcesJar()
+    withJavadocJar()
+}
+
+tasks.withType(Javadoc) {
+    failOnError false
+}
+
+publishing {
+    publications {
+        mavenJava(MavenPublication) {
+            from components.java
+            groupId = project.group
+            artifactId = 'x2c-compiler'
+            version = project.version
+
+            pom {
+                name = 'X2C Compiler'
+                description = 'Annotation processor for Android build-time layout generation.'
+                url = 'https://github.com/linyilei/X2C-AGP'
+                licenses {
+                    license {
+                        name = 'The MIT License'
+                        url = 'https://opensource.org/licenses/MIT'
+                    }
+                }
+                developers {
+                    developer {
+                        id = 'linyilei'
+                        name = 'linyilei'
+                    }
+                }
+                scm {
+                    connection = 'scm:git:https://github.com/linyilei/X2C-AGP.git'
+                    developerConnection = 'scm:git:ssh://git@github.com/linyilei/X2C-AGP.git'
+                    url = 'https://github.com/linyilei/X2C-AGP'
+                }
+            }
+        }
+    }
+    repositories {
+        // JitPack runs publishToMavenLocal and serves artifacts from ~/.m2.
+    }
+}

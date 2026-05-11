@@ -33,4 +33,7 @@ dependencies {
             ? project(':x2c-runtime')
             : "com.github.linyilei.X2C-AGP:x2c-runtime:${x2cVersion}"
     implementation 'androidx.constraintlayout:constraintlayout:2.0.4'
+    annotationProcessor useLocalX2c
+            ? project(':x2c-compiler')
+            : "com.github.linyilei.X2C-AGP:x2c-compiler:${x2cVersion}"
 }

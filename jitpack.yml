@@ -7,4 +7,5 @@ env:
 
 install:
   - ./gradlew --no-daemon :x2c-runtime:publishReleasePublicationToMavenLocal
+  - ./gradlew --no-daemon :x2c-compiler:publishToMavenLocal
   - ./gradlew --no-daemon -p x2c-gradle-plugin publishToMavenLocal

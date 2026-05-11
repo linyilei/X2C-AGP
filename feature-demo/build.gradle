@@ -41,5 +41,8 @@ dependencies {
     implementation 'androidx.constraintlayout:constraintlayout:2.0.4'
     implementation 'androidx.recyclerview:recyclerview:1.2.1'
     implementation 'com.alibaba:arouter-api:1.5.2'
+    annotationProcessor useLocalX2c
+            ? project(':x2c-compiler')
+            : "com.github.linyilei.X2C-AGP:x2c-compiler:${x2cVersion}"
     annotationProcessor 'com.alibaba:arouter-compiler:1.5.2'
 }
