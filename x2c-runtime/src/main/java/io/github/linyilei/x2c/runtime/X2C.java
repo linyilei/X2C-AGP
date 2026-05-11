@@ -26,7 +26,7 @@ public final class X2C {
     private static volatile RootIndex sInstalledRootIndex;
     private static final ConcurrentHashMap<String, RootIndex> sRootIndexes = new ConcurrentHashMap<>();
     private static final ConcurrentHashMap<String, Boolean> sRootIndexMisses = new ConcurrentHashMap<>();
-    private static final ConcurrentHashMap<String, SparseArray<IViewFactory>> sLoadedGroups = new ConcurrentHashMap<>();
+    private static final ConcurrentHashMap<X2CGroup, SparseArray<IViewFactory>> sLoadedGroups = new ConcurrentHashMap<>();
     private static final ConcurrentHashMap<Integer, Object> sFactoryCache = new ConcurrentHashMap<>();
     private static volatile boolean sDebugLogging;
 
@@ -37,7 +37,7 @@ public final class X2C {
         synchronized (X2C.class) {
             sInstalledRootIndex = rootIndex == null ? null : new RootIndex();
             if (rootIndex != null) {
-                rootIndex.loadInto(sInstalledRootIndex.layoutToGroup, sInstalledRootIndex.groupClassNames);
+                rootIndex.loadInto(sInstalledRootIndex.layoutToGroup, sInstalledRootIndex.groups);
             }
             sRootIndexes.clear();
             sRootIndexMisses.clear();
@@ -125,9 +125,9 @@ public final class X2C {
     public static void clearPreload(int layoutId) {
         synchronized (X2C.class) {
             sFactoryCache.remove(layoutId);
-            String groupClassName = resolveCachedGroupClassName(layoutId);
-            if (groupClassName != null) {
-                sLoadedGroups.remove(groupClassName);
+            X2CGroup group = resolveCachedGroup(layoutId);
+            if (group != null) {
+                sLoadedGroups.remove(group);
             }
         }
     }
@@ -205,12 +205,12 @@ public final class X2C {
             return null;
         }
         int groupId = rootIndex.layoutToGroup.get(layoutId, -1);
-        String groupClassName = groupId == -1 ? null : rootIndex.groupClassNames.get(groupId);
-        if (groupClassName == null) {
+        X2CGroup group = groupId == -1 ? null : rootIndex.groups.get(groupId);
+        if (group == null) {
             log("No generated group for " + resourceName(context, layoutId));
             return null;
         }
-        SparseArray<IViewFactory> factories = resolveGroupFactories(context, groupClassName);
+        SparseArray<IViewFactory> factories = resolveGroupFactories(group);
         if (factories == null) {
             return null;
         }
@@ -255,19 +255,19 @@ public final class X2C {
     }
 
     @Nullable
-    private static SparseArray<IViewFactory> resolveGroupFactories(@NonNull Context context, @NonNull String groupClassName) {
-        SparseArray<IViewFactory> factories = sLoadedGroups.get(groupClassName);
+    private static SparseArray<IViewFactory> resolveGroupFactories(@NonNull X2CGroup group) {
+        SparseArray<IViewFactory> factories = sLoadedGroups.get(group);
         if (factories != null) {
             return factories;
         }
-        synchronized (groupClassName.intern()) {
-            factories = sLoadedGroups.get(groupClassName);
+        synchronized (group) {
+            factories = sLoadedGroups.get(group);
             if (factories != null) {
                 return factories;
             }
-            factories = tryLoadGeneratedGroup(context, groupClassName);
+            factories = loadGeneratedGroup(group);
             if (factories != null) {
-                sLoadedGroups.put(groupClassName, factories);
+                sLoadedGroups.put(group, factories);
             }
             return factories;
         }
@@ -281,10 +281,10 @@ public final class X2C {
             Object instance = clazz.getDeclaredConstructor().newInstance();
             if (instance instanceof X2CRootIndex) {
                 RootIndex rootIndex = new RootIndex();
-                ((X2CRootIndex) instance).loadInto(rootIndex.layoutToGroup, rootIndex.groupClassNames);
+                ((X2CRootIndex) instance).loadInto(rootIndex.layoutToGroup, rootIndex.groups);
                 log("Loaded generated root index: " + className
                         + ", entries=" + rootIndex.layoutToGroup.size()
-                        + ", groups=" + rootIndex.groupClassNames.size());
+                        + ", groups=" + rootIndex.groups.size());
                 return rootIndex;
             }
         } catch (Exception ignore) {
@@ -295,50 +295,45 @@ public final class X2C {
     }
 
     @Nullable
-    private static String resolveCachedGroupClassName(int layoutId) {
-        String groupClassName = resolveGroupClassName(sInstalledRootIndex, layoutId);
-        if (groupClassName != null) {
-            return groupClassName;
+    private static X2CGroup resolveCachedGroup(int layoutId) {
+        X2CGroup group = resolveGroup(sInstalledRootIndex, layoutId);
+        if (group != null) {
+            return group;
         }
         for (RootIndex rootIndex : sRootIndexes.values()) {
-            groupClassName = resolveGroupClassName(rootIndex, layoutId);
-            if (groupClassName != null) {
-                return groupClassName;
+            group = resolveGroup(rootIndex, layoutId);
+            if (group != null) {
+                return group;
             }
         }
         return null;
     }
 
     @Nullable
-    private static String resolveGroupClassName(@Nullable RootIndex rootIndex, int layoutId) {
+    private static X2CGroup resolveGroup(@Nullable RootIndex rootIndex, int layoutId) {
         if (rootIndex == null) {
             return null;
         }
         int groupId = rootIndex.layoutToGroup.get(layoutId, -1);
-        return groupId == -1 ? null : rootIndex.groupClassNames.get(groupId);
+        return groupId == -1 ? null : rootIndex.groups.get(groupId);
     }
 
     private static final class RootIndex {
         final SparseIntArray layoutToGroup = new SparseIntArray();
-        final SparseArray<String> groupClassNames = new SparseArray<>();
+        final SparseArray<X2CGroup> groups = new SparseArray<>();
     }
 
     @Nullable
-    private static SparseArray<IViewFactory> tryLoadGeneratedGroup(@NonNull Context context, @NonNull String className) {
+    private static SparseArray<IViewFactory> loadGeneratedGroup(@NonNull X2CGroup group) {
         try {
-            Class<?> clazz = context.getClassLoader().loadClass(className);
-            Object instance = clazz.getDeclaredConstructor().newInstance();
-            if (instance instanceof X2CGroup) {
-                SparseArray<IViewFactory> factories = new SparseArray<>();
-                ((X2CGroup) instance).loadInto(factories);
-                log("Loaded generated group: " + className + ", factories=" + factories.size());
-                return factories;
-            }
-        } catch (Exception ignore) {
-            log("Generated group not found: " + className);
+            SparseArray<IViewFactory> factories = new SparseArray<>();
+            group.loadInto(factories);
+            log("Loaded generated group: " + group.getClass().getName() + ", factories=" + factories.size());
+            return factories;
+        } catch (RuntimeException ignore) {
+            log("Generated group failed: " + group.getClass().getName());
             return null;
         }
-        return null;
     }
 
     private static void log(@NonNull String message) {
