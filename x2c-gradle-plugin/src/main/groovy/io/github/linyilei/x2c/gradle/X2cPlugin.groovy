@@ -449,10 +449,28 @@ class X2CRuntimeTransform extends Transform {
 
 class X2cExtension {
 
+    static final int DEFAULT_GROUP_SIZE = 64
+
     private final Set<String> excludedLayouts = new LinkedHashSet<>()
+    private int groupSize = DEFAULT_GROUP_SIZE
 
     Set<String> normalizedExcludedLayouts() {
         return new LinkedHashSet<>(excludedLayouts)
+    }
+
+    int normalizedGroupSize() {
+        return groupSize <= 0 ? DEFAULT_GROUP_SIZE : groupSize
+    }
+
+    int getGroupSize() {
+        return groupSize
+    }
+
+    void setGroupSize(int value) {
+        if (value <= 0) {
+            throw new IllegalArgumentException('x2c.groupSize must be greater than 0.')
+        }
+        groupSize = value
     }
 
     void setExcludes(Iterable<?> values) {
@@ -561,6 +579,11 @@ class GenerateX2cTask extends DefaultTask {
         return new ArrayList<>(excluded).sort()
     }
 
+    @Input
+    int getX2cGroupSize() {
+        return extensionConfig == null ? X2cExtension.DEFAULT_GROUP_SIZE : extensionConfig.normalizedGroupSize()
+    }
+
     @InputFiles
     @PathSensitive(PathSensitivity.RELATIVE)
     FileCollection getX2cResourceDirs() {
@@ -611,6 +634,7 @@ class GenerateX2cTask extends DefaultTask {
         }
 
         JavaWriter writer = new JavaWriter(outputDir, javaResOutputDir, generatedPackage, rPackage, layouts, targets,
+                getX2cGroupSize(),
                 applicationModule, project)
         writer.writeAll()
     }
@@ -1034,11 +1058,13 @@ class JavaWriter {
     private final String rPackage
     private final Map<String, Map<String, LayoutSpec>> layouts
     private final Set<String> targets
+    private final int groupSize
     private final boolean applicationModule
     private final Project project
 
     JavaWriter(File outputDir, File javaResOutputDir, String generatedPackage, String rPackage,
                Map<String, Map<String, LayoutSpec>> layouts, Set<String> targets,
+               int groupSize,
                boolean applicationModule, Project project) {
         this.outputDir = outputDir
         this.javaResOutputDir = javaResOutputDir
@@ -1046,6 +1072,7 @@ class JavaWriter {
         this.rPackage = rPackage
         this.layouts = layouts
         this.targets = targets
+        this.groupSize = groupSize <= 0 ? X2cExtension.DEFAULT_GROUP_SIZE : groupSize
         this.applicationModule = applicationModule
         this.project = project
     }
@@ -1061,7 +1088,7 @@ class JavaWriter {
                 }
             }
         }
-        writeGroup()
+        writeGroups()
         if (applicationModule) {
             writeRootIndex()
         } else {
@@ -1070,20 +1097,24 @@ class JavaWriter {
         }
     }
 
-    private void writeGroup() {
+    private void writeGroups() {
+        groupShards().eachWithIndex { List<String> shard, int index ->
+            writeGroup(index, shard)
+        }
+    }
+
+    private void writeGroup(int index, List<String> shard) {
         ParameterizedTypeName factoryArray = ParameterizedTypeName.get(SPARSE_ARRAY, I_VIEW_FACTORY)
         MethodSpec.Builder loadInto = MethodSpec.methodBuilder('loadInto')
                 .addAnnotation(Override)
                 .addModifiers(Modifier.PUBLIC)
                 .returns(TypeName.VOID)
                 .addParameter(factoryArray, 'factories')
-        targets.each { String layoutName ->
-            if (canGenerateLayout(layoutName)) {
+        shard.each { String layoutName ->
                 loadInto.addStatement('factories.put($T.layout.$L, new $T())',
                         rClass(), layoutName, ClassName.get(generatedPackage, dispatcherName(layoutName)))
-            }
         }
-        TypeSpec typeSpec = TypeSpec.classBuilder('X2CGroup')
+        TypeSpec typeSpec = TypeSpec.classBuilder(groupName(index))
                 .addModifiers(Modifier.PUBLIC, Modifier.FINAL)
                 .addSuperinterface(X2C_GROUP)
                 .addMethod(loadInto.build())
@@ -1092,13 +1123,14 @@ class JavaWriter {
     }
 
     private void writeModuleIndex() {
-        String groupClassName = "${generatedPackage}.X2CGroup"
         MethodSpec.Builder loadInto = rootLoadIntoBuilder()
-        loadInto.addStatement('int groupId = ensureGroup(groups, $S, new $T())',
-                groupClassName, ClassName.get(generatedPackage, 'X2CGroup'))
-        targets.each { String layoutName ->
-            if (canGenerateLayout(layoutName)) {
-                loadInto.addStatement('layoutToGroup.put($T.layout.$L, groupId)', rClass(), layoutName)
+        groupShards().eachWithIndex { List<String> shard, int index ->
+            String groupClassName = "${generatedPackage}.${groupName(index)}"
+            String groupIdVar = "groupId${index}"
+            loadInto.addStatement('int $N = ensureGroup(groups, $S, new $T())',
+                    groupIdVar, groupClassName, groupType(index))
+            shard.each { String layoutName ->
+                loadInto.addStatement('layoutToGroup.put($T.layout.$L, $N)', rClass(), layoutName, groupIdVar)
             }
         }
         TypeSpec typeSpec = TypeSpec.classBuilder('X2CModuleIndex')
@@ -1124,12 +1156,10 @@ class JavaWriter {
 
     private void writeRootIndex() {
         MethodSpec.Builder loadInto = rootLoadIntoBuilder()
-        if (targets.any { String layoutName -> canGenerateLayout(layoutName) }) {
-            loadInto.addStatement('groups.put(0, new $T())', ClassName.get(generatedPackage, 'X2CGroup'))
-            targets.each { String layoutName ->
-                if (canGenerateLayout(layoutName)) {
-                    loadInto.addStatement('layoutToGroup.put($T.layout.$L, 0)', rClass(), layoutName)
-                }
+        groupShards().eachWithIndex { List<String> shard, int index ->
+            loadInto.addStatement('groups.put($L, new $T())', index, groupType(index))
+            shard.each { String layoutName ->
+                loadInto.addStatement('layoutToGroup.put($T.layout.$L, $L)', rClass(), layoutName, index)
             }
         }
         // The class names are intentionally kept out of source-level references; ASM injects direct calls after javac.
@@ -1336,6 +1366,28 @@ class JavaWriter {
         return AnnotationSpec.builder(SuppressWarnings)
                 .addMember('value', '{$S, $S}', 'rawtypes', 'unchecked')
                 .build()
+    }
+
+    private List<List<String>> groupShards() {
+        List<String> generatedLayouts = new ArrayList<String>(
+                targets.findAll { String layoutName -> canGenerateLayout(layoutName) })
+        if (generatedLayouts.isEmpty()) {
+            return []
+        }
+        List<List<String>> shards = []
+        for (int start = 0; start < generatedLayouts.size(); start += groupSize) {
+            int end = Math.min(start + groupSize, generatedLayouts.size())
+            shards.add(new ArrayList<String>(generatedLayouts.subList(start, end)))
+        }
+        return shards
+    }
+
+    private ClassName groupType(int index) {
+        return ClassName.get(generatedPackage, groupName(index))
+    }
+
+    private static String groupName(int index) {
+        return index == 0 ? 'X2CGroup' : "X2CGroup_${index}"
     }
 
     private boolean isMergeRoot(String layoutName) {

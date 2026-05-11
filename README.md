@@ -102,13 +102,14 @@ dependencies {
 
 ## 快速开始
 
-### 1. 配置排除规则
+### 1. 配置生成策略
 
-黑名单仍是模块级 DSL，用来排除某些布局名：
+黑名单是模块级 DSL，用来排除某些布局名。`groupSize` 控制生成索引的分片大小，默认 `64`，即每个生成的 `X2CGroup` 最多持有 64 个 layout factory：
 
 ```groovy
 x2c {
     blacklist = ['debug_panel', 'legacy_banner']
+    groupSize = 64
 }
 ```
 

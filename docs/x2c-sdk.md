@@ -66,11 +66,12 @@ dependencies {
 
 The plugin scans `@Xml(layouts = "...")` usages and then expands `include` dependencies recursively.
 
-You can also blacklist layouts by name so they are skipped as generation targets:
+You can blacklist layouts by name so they are skipped as generation targets. `groupSize` controls generated group sharding and defaults to `64`, so each generated `X2CGroup` owns at most 64 layout factories:
 
 ```groovy
 x2c {
     blacklist = ['debug_panel', 'legacy_banner']
+    groupSize = 64
 }
 ```
 
