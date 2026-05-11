@@ -1,10 +1,7 @@
 package io.github.linyilei.x2c.gradle
 
-import com.android.build.api.transform.Format
-import com.android.build.api.transform.QualifiedContent
-import com.android.build.api.transform.Status
-import com.android.build.api.transform.Transform
-import com.android.build.api.transform.TransformInvocation
+import com.android.build.api.instrumentation.FramesComputationMode
+import com.android.build.api.instrumentation.InstrumentationScope
 import com.squareup.javapoet.AnnotationSpec
 import com.squareup.javapoet.ClassName
 import com.squareup.javapoet.CodeBlock
@@ -40,10 +37,7 @@ import java.io.BufferedReader
 import java.io.InputStream
 import java.io.InputStreamReader
 import java.nio.charset.StandardCharsets
-import java.util.zip.ZipEntry
 import java.util.zip.ZipFile
-import java.util.zip.ZipInputStream
-import java.util.zip.ZipOutputStream
 
 class X2cPlugin implements Plugin<Project> {
 
@@ -66,9 +60,8 @@ class X2cPlugin implements Plugin<Project> {
         def android = project.extensions.getByName('android')
         String rPackage = resolveManifestPackage(project, android)
         String libraryGeneratedPackage = applicationModule ? null : rPackage + '.x2c'
-        Map<String, GenerateX2cTask> tasksByVariant = new LinkedHashMap<>()
         if (applicationModule) {
-            android.registerTransform(new X2CRuntimeTransform(project, tasksByVariant))
+            configureRuntimeInstrumentation(project)
         }
 
         def variants = applicationModule ? android.applicationVariants : android.libraryVariants
@@ -97,7 +90,6 @@ class X2cPlugin implements Plugin<Project> {
                     it.moduleIndexClassClasspath = runtimeClasspath == null
                             ? project.files()
                             : moduleIndexClassClasspath(project, runtimeClasspath)
-                    tasksByVariant[variant.name] = it
                 }
             }
             variant.registerJavaGeneratingTask(task, outputDir)
@@ -110,6 +102,26 @@ class X2cPlugin implements Plugin<Project> {
                     processTask.from(task.javaResOutputDir)
                 }
             }
+        }
+    }
+
+    private static void configureRuntimeInstrumentation(Project project) {
+        def androidComponents = project.extensions.findByName('androidComponents')
+        if (androidComponents == null) {
+            throw new GradleException('X2C requires the AGP ASM instrumentation API. Use Android Gradle Plugin 4.2 or newer.')
+        }
+        try {
+            androidComponents.onVariants(androidComponents.selector().all()) { variant ->
+                variant.transformClassesWith(X2CRootIndexLoaderClassVisitorFactory, InstrumentationScope.ALL) { parameters ->
+                    parameters.generatedRootInternalName.set(variant.applicationId.map { String applicationId ->
+                        applicationId.replace('.', '/') + '/x2c/X2CRootIndex'
+                    })
+                }
+                variant.setAsmFramesComputationMode(FramesComputationMode.COMPUTE_FRAMES_FOR_INSTRUMENTED_METHODS)
+            }
+            project.logger.info('X2C registered AGP ASM instrumentation for runtime root-index injection.')
+        } catch (Throwable error) {
+            throw new GradleException('X2C could not register AGP ASM instrumentation for runtime root-index injection.', error)
         }
     }
 
@@ -248,265 +260,6 @@ class X2cPlugin implements Plugin<Project> {
                 // Parser implementation does not expose every feature on every JDK.
             }
         }
-    }
-}
-
-class X2CRuntimeTransform extends Transform {
-
-    private static final String X2C_CLASS_ENTRY = 'io/github/linyilei/x2c/runtime/X2C.class'
-    private static final String X2C_INTERNAL_NAME = 'io/github/linyilei/x2c/runtime/X2C'
-    private static final String X2C_ROOT_INDEX_INTERNAL_NAME = 'io/github/linyilei/x2c/runtime/X2CRootIndex'
-    private static final String ROOT_INDEX_INTERNAL_NAME = 'io/github/linyilei/x2c/runtime/X2C$RootIndex'
-    private static final String ROOT_INDEX_LOADER_METHOD = 'tryLoadGeneratedRootIndex'
-    private static final String ROOT_INDEX_LOADER_DESC = '(Landroid/content/Context;)Lio/github/linyilei/x2c/runtime/X2C$RootIndex;'
-    private static final String LOAD_INTO_DESC = '(Landroid/util/SparseIntArray;Landroid/util/SparseArray;)V'
-
-    private final Project project
-    private final Map<String, GenerateX2cTask> tasksByVariant
-
-    X2CRuntimeTransform(Project project, Map<String, GenerateX2cTask> tasksByVariant) {
-        this.project = project
-        this.tasksByVariant = tasksByVariant
-    }
-
-    @Override
-    String getName() {
-        return 'x2cRuntime'
-    }
-
-    @Override
-    Set<QualifiedContent.ContentType> getInputTypes() {
-        return Collections.singleton(QualifiedContent.DefaultContentType.CLASSES)
-    }
-
-    @Override
-    Set<QualifiedContent.Scope> getScopes() {
-        return EnumSet.of(QualifiedContent.Scope.PROJECT,
-                QualifiedContent.Scope.SUB_PROJECTS,
-                QualifiedContent.Scope.EXTERNAL_LIBRARIES)
-    }
-
-    @Override
-    boolean isIncremental() {
-        return true
-    }
-
-    @Override
-    void transform(TransformInvocation invocation) {
-        boolean incremental = invocation.incremental
-        if (!incremental) {
-            invocation.outputProvider.deleteAll()
-        }
-        GenerateX2cTask task = tasksByVariant[invocation.context.variantName]
-        String generatedRootInternalName = generatedRootInternalName(task)
-        boolean patchRootLoader = generatedRootInternalName != null
-        int[] patchedX2CClasses = [0] as int[]
-
-        invocation.inputs.each { input ->
-            input.directoryInputs.each { directoryInput ->
-                File outputDir = invocation.outputProvider.getContentLocation(directoryInput.name,
-                        directoryInput.contentTypes, directoryInput.scopes, Format.DIRECTORY)
-                if (incremental) {
-                    copyChangedDirectoryFiles(directoryInput.file, outputDir, directoryInput.changedFiles,
-                            generatedRootInternalName, patchRootLoader, patchedX2CClasses)
-                } else {
-                    copyDirectory(directoryInput.file, outputDir, generatedRootInternalName, patchRootLoader, patchedX2CClasses)
-                }
-            }
-            input.jarInputs.each { jarInput ->
-                File outputJar = invocation.outputProvider.getContentLocation(jarInput.name,
-                        jarInput.contentTypes, jarInput.scopes, Format.JAR)
-                if (incremental) {
-                    copyChangedJar(jarInput.file, outputJar, jarInput.status,
-                            generatedRootInternalName, patchRootLoader, patchedX2CClasses)
-                } else {
-                    copyJar(jarInput.file, outputJar, generatedRootInternalName, patchRootLoader, patchedX2CClasses)
-                }
-            }
-        }
-
-        if (patchRootLoader) {
-            if (!incremental && patchedX2CClasses[0] == 0) {
-                project.logger.warn('X2C ASM did not find io.github.linyilei.x2c.runtime.X2C to inject the generated root index.')
-            } else if (patchedX2CClasses[0] > 0) {
-                project.logger.info("X2C ASM injected generated root index into ${patchedX2CClasses[0]} X2C runtime class file(s).")
-            }
-        }
-    }
-
-    private static String generatedRootInternalName(GenerateX2cTask task) {
-        if (task == null || !task.applicationModule || task.generatedPackage == null
-                || task.generatedPackage.trim().isEmpty()) {
-            return null
-        }
-        File rootIndexSource = new File(task.outputDir, task.generatedPackage.replace('.', '/') + '/X2CRootIndex.java')
-        return rootIndexSource.isFile() ? task.generatedPackage.replace('.', '/') + '/X2CRootIndex' : null
-    }
-
-    private static void copyDirectory(File inputDir, File outputDir, String generatedRootInternalName,
-                                      boolean patchRootLoader, int[] patchedX2CClasses) {
-        if (outputDir.exists()) {
-            outputDir.deleteDir()
-        }
-        if (inputDir == null || !inputDir.exists()) {
-            return
-        }
-        inputDir.eachFileRecurse { File child ->
-            if (!child.isFile()) {
-                return
-            }
-            String relativePath = inputDir.toPath().relativize(child.toPath()).toString()
-                    .replace(File.separatorChar, '/' as char)
-            copyDirectoryFile(child, new File(outputDir, relativePath), relativePath,
-                    generatedRootInternalName, patchRootLoader, patchedX2CClasses)
-        }
-    }
-
-    private static void copyChangedDirectoryFiles(File inputDir, File outputDir, Map<File, Status> changedFiles,
-                                                  String generatedRootInternalName, boolean patchRootLoader,
-                                                  int[] patchedX2CClasses) {
-        if (inputDir == null || changedFiles == null || changedFiles.isEmpty()) {
-            return
-        }
-        changedFiles.each { File changedFile, Status status ->
-            String relativePath = inputDir.toPath().relativize(changedFile.toPath()).toString()
-                    .replace(File.separatorChar, '/' as char)
-            File outputFile = new File(outputDir, relativePath)
-            if (status == Status.REMOVED) {
-                deletePath(outputFile)
-            } else if (status == Status.ADDED || status == Status.CHANGED) {
-                if (changedFile.isFile()) {
-                    copyDirectoryFile(changedFile, outputFile, relativePath,
-                            generatedRootInternalName, patchRootLoader, patchedX2CClasses)
-                } else if (changedFile.isDirectory()) {
-                    outputFile.mkdirs()
-                }
-            }
-        }
-    }
-
-    private static void copyDirectoryFile(File inputFile, File outputFile, String relativePath,
-                                          String generatedRootInternalName, boolean patchRootLoader,
-                                          int[] patchedX2CClasses) {
-        outputFile.parentFile.mkdirs()
-        byte[] bytes = inputFile.bytes
-        if (patchRootLoader && relativePath == X2C_CLASS_ENTRY) {
-            bytes = patchX2CRootIndexLoader(bytes, generatedRootInternalName)
-            patchedX2CClasses[0]++
-        }
-        outputFile.bytes = bytes
-    }
-
-    private static void copyChangedJar(File inputJar, File outputJar, Status status, String generatedRootInternalName,
-                                       boolean patchRootLoader, int[] patchedX2CClasses) {
-        if (status == Status.REMOVED) {
-            deletePath(outputJar)
-        } else if (status == Status.ADDED || status == Status.CHANGED) {
-            copyJar(inputJar, outputJar, generatedRootInternalName, patchRootLoader, patchedX2CClasses)
-        }
-    }
-
-    private static void deletePath(File file) {
-        if (file == null || !file.exists()) {
-            return
-        }
-        if (file.isDirectory()) {
-            file.deleteDir()
-        } else {
-            file.delete()
-        }
-    }
-
-    private static void copyJar(File inputJar, File outputJar, String generatedRootInternalName,
-                                boolean patchRootLoader, int[] patchedX2CClasses) {
-        outputJar.parentFile.mkdirs()
-        ZipInputStream zipInputStream = new ZipInputStream(new FileInputStream(inputJar))
-        ZipOutputStream zipOutputStream = new ZipOutputStream(new FileOutputStream(outputJar))
-        Set<String> writtenEntries = new HashSet<>()
-        try {
-            ZipEntry entry = zipInputStream.nextEntry
-            while (entry != null) {
-                if (!writtenEntries.add(entry.name)) {
-                    zipInputStream.closeEntry()
-                    entry = zipInputStream.nextEntry
-                    continue
-                }
-                ZipEntry outputEntry = new ZipEntry(entry.name)
-                outputEntry.time = entry.time
-                zipOutputStream.putNextEntry(outputEntry)
-                if (!entry.directory) {
-                    byte[] bytes = readAllBytes(zipInputStream)
-                    if (patchRootLoader && entry.name == X2C_CLASS_ENTRY) {
-                        bytes = patchX2CRootIndexLoader(bytes, generatedRootInternalName)
-                        patchedX2CClasses[0]++
-                    }
-                    zipOutputStream.write(bytes)
-                }
-                zipOutputStream.closeEntry()
-                zipInputStream.closeEntry()
-                entry = zipInputStream.nextEntry
-            }
-        } finally {
-            zipOutputStream.close()
-            zipInputStream.close()
-        }
-    }
-
-    private static byte[] readAllBytes(InputStream inputStream) {
-        ByteArrayOutputStream outputStream = new ByteArrayOutputStream()
-        byte[] buffer = new byte[8192]
-        int read = inputStream.read(buffer)
-        while (read != -1) {
-            outputStream.write(buffer, 0, read)
-            read = inputStream.read(buffer)
-        }
-        return outputStream.toByteArray()
-    }
-
-    private static byte[] patchX2CRootIndexLoader(byte[] originalBytes, String generatedRootInternalName) {
-        String rootIndexLogMessage = 'Loaded generated root index: ' + generatedRootInternalName.replace('/', '.')
-        ClassReader reader = new ClassReader(originalBytes)
-        ClassWriter writer = new ClassWriter(reader, ClassWriter.COMPUTE_MAXS)
-        boolean[] patched = [false] as boolean[]
-        ClassVisitor visitor = new ClassVisitor(Opcodes.ASM7, writer) {
-            @Override
-            MethodVisitor visitMethod(int access, String name, String descriptor, String signature, String[] exceptions) {
-                if (ROOT_INDEX_LOADER_METHOD == name && ROOT_INDEX_LOADER_DESC == descriptor) {
-                    MethodVisitor mv = super.visitMethod(access, name, descriptor, signature, exceptions)
-                    mv.visitCode()
-                    mv.visitTypeInsn(Opcodes.NEW, ROOT_INDEX_INTERNAL_NAME)
-                    mv.visitInsn(Opcodes.DUP)
-                    mv.visitMethodInsn(Opcodes.INVOKESPECIAL, ROOT_INDEX_INTERNAL_NAME, '<init>', '()V', false)
-                    mv.visitVarInsn(Opcodes.ASTORE, 1)
-                    mv.visitTypeInsn(Opcodes.NEW, generatedRootInternalName)
-                    mv.visitInsn(Opcodes.DUP)
-                    mv.visitMethodInsn(Opcodes.INVOKESPECIAL, generatedRootInternalName, '<init>', '()V', false)
-                    mv.visitVarInsn(Opcodes.ALOAD, 1)
-                    mv.visitFieldInsn(Opcodes.GETFIELD, ROOT_INDEX_INTERNAL_NAME,
-                            'layoutToGroup', 'Landroid/util/SparseIntArray;')
-                    mv.visitVarInsn(Opcodes.ALOAD, 1)
-                    mv.visitFieldInsn(Opcodes.GETFIELD, ROOT_INDEX_INTERNAL_NAME,
-                            'groups', 'Landroid/util/SparseArray;')
-                    mv.visitMethodInsn(Opcodes.INVOKEINTERFACE, X2C_ROOT_INDEX_INTERNAL_NAME,
-                            'loadInto', LOAD_INTO_DESC, true)
-                    mv.visitLdcInsn(rootIndexLogMessage)
-                    mv.visitMethodInsn(Opcodes.INVOKESTATIC, X2C_INTERNAL_NAME,
-                            'log', '(Ljava/lang/String;)V', false)
-                    mv.visitVarInsn(Opcodes.ALOAD, 1)
-                    mv.visitInsn(Opcodes.ARETURN)
-                    mv.visitMaxs(0, 0)
-                    mv.visitEnd()
-                    patched[0] = true
-                    return null
-                }
-                return super.visitMethod(access, name, descriptor, signature, exceptions)
-            }
-        }
-        reader.accept(visitor, 0)
-        if (!patched[0]) {
-            throw new GradleException("X2C ASM could not find ${ROOT_INDEX_LOADER_METHOD} in ${X2C_INTERNAL_NAME}.")
-        }
-        return writer.toByteArray()
     }
 }
 
@@ -691,7 +444,7 @@ class GenerateX2cTask extends DefaultTask {
         Map<String, Map<String, LayoutSpec>> layouts = selection.layouts
         Set<String> targets = selection.targets
         List<String> moduleIndexClassNames = findModuleIndexClassNames()
-        if (targets.isEmpty() && moduleIndexClassNames.isEmpty()) {
+        if (!applicationModule && targets.isEmpty()) {
             project.logger.lifecycle('X2C found no annotated layouts selected.')
             return
         }

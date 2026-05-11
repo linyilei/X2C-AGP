@@ -16,7 +16,7 @@ This project contains an initial SDK-style implementation for build-time layout 
 - `feature-demo`: Android library demo module.
 - `feature-nested`: transitive Android library demo module used by `feature-demo` to exercise `app -> feature-demo -> feature-nested` root-index aggregation.
 
-The plugin supports both application and Android library modules. Library modules generate their own group and module index. Application modules read dependency module-index markers, merge them into the app root index, and inject direct root-index and module-index registration bytecode with ASM. Runtime no longer uses `Class.forName` to find the app root index or generated groups.
+The plugin supports both application and Android library modules. Library modules generate their own group and module index. Application modules read dependency module-index markers, merge them into the app root index, and inject direct root-index and module-index registration bytecode with ASM. Runtime root lookup uses AGP ASM instrumentation and no longer registers the legacy Transform API. Runtime no longer uses `Class.forName` to find the app root index or generated groups.
 
 ## Published Artifacts
 
@@ -175,7 +175,7 @@ dependencies {
 }
 ```
 
-Each Android library generates its own `X2CGroup` and `X2CModuleIndex` under `<manifest package>.x2c`. Application modules generate an app-level `X2CRootIndex`, read module-index markers from dependency artifacts, and use ASM to replace the generated root-index placeholder with direct `X2CModuleIndex.loadInto(...)` calls. The application transform also patches the runtime root-index lookup to directly instantiate the app `X2CRootIndex`, while root/module indexes store generated `X2CGroup` instances instead of class names.
+Each Android library generates its own `X2CGroup` and `X2CModuleIndex` under `<manifest package>.x2c`. Application modules generate an app-level `X2CRootIndex`, read module-index markers from dependency artifacts, and use ASM to replace the generated root-index placeholder with direct `X2CModuleIndex.loadInto(...)` calls. AGP ASM instrumentation patches the runtime root-index lookup to directly instantiate the app `X2CRootIndex`, while root/module indexes store generated `X2CGroup` instances instead of class names.
 
 This allows app layouts to include a normal-root layout from a feature/library module. When an included target layout has a root `<merge>`, X2C follows native `LayoutInflater` behavior: include-tag `LayoutParams`, `android:id`, and `android:visibility` are ignored, merge children are attached directly to the parent, and include-tag `android:theme` still wraps the inflated subtree.
 
