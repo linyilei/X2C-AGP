@@ -764,13 +764,14 @@ class GenerateX2cTask extends DefaultTask {
         classNames.each { String className ->
             expectedEntries[className.replace('.', '/') + '.class'] = className
         }
-        Set<String> foundEntries = new HashSet<>()
-        getX2cModuleIndexClassClasspath().files.each { File file ->
-            scanExpectedClassEntries(file, expectedEntries.keySet(), foundEntries)
+        Set<String> missingEntries = new LinkedHashSet<>(expectedEntries.keySet())
+        for (File file : getX2cModuleIndexClassClasspath().files) {
+            if (missingEntries.isEmpty()) {
+                break
+            }
+            scanExpectedClassEntries(file, missingEntries)
         }
-        List<String> missingClassNames = expectedEntries.findAll { String entryName, String className ->
-            !foundEntries.contains(entryName)
-        }.values().sort()
+        List<String> missingClassNames = missingEntries.collect { String entryName -> expectedEntries[entryName] }.sort()
         if (!missingClassNames.isEmpty()) {
             throw new GradleException("X2C module-index marker points to missing classes: "
                     + missingClassNames.join(', ')
@@ -778,14 +779,14 @@ class GenerateX2cTask extends DefaultTask {
         }
     }
 
-    private static void scanExpectedClassEntries(File file, Set<String> expectedEntries, Set<String> foundEntries) {
-        if (file == null || !file.exists() || expectedEntries.isEmpty()) {
+    private static void scanExpectedClassEntries(File file, Set<String> missingEntries) {
+        if (file == null || !file.exists() || missingEntries.isEmpty()) {
             return
         }
         if (file.isDirectory()) {
-            expectedEntries.each { String entryName ->
-                if (!foundEntries.contains(entryName) && new File(file, entryName).isFile()) {
-                    foundEntries.add(entryName)
+            new ArrayList<>(missingEntries).each { String entryName ->
+                if (new File(file, entryName).isFile()) {
+                    missingEntries.remove(entryName)
                 }
             }
             return
@@ -796,9 +797,9 @@ class GenerateX2cTask extends DefaultTask {
         try {
             ZipFile zipFile = new ZipFile(file)
             try {
-                zipFile.entries().each { entry ->
-                    if (!entry.directory && expectedEntries.contains(entry.name)) {
-                        foundEntries.add(entry.name)
+                new ArrayList<>(missingEntries).each { String entryName ->
+                    if (zipFile.getEntry(entryName) != null) {
+                        missingEntries.remove(entryName)
                     }
                 }
             } finally {
